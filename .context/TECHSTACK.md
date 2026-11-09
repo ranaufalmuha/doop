@@ -657,9 +657,10 @@ data-doop-webfonts>` for the roster families the frame names and does not load i
 
 - GitHub Actions:
   - `.github/workflows/ci.yml` - gates `typecheck`, `lint` + `format:check` + `doc-lint`, `build`
-    and `test` (four vitest shards, plus a dedicated `test-drawing` job for the 98-test
-    `tests/drawingBrowser.test.ts`, which reloads the whole fixture per test and does not share a
-    runner with the other browser files) as parallel jobs on push to `main` and on PRs,
+    and `test` (four vitest shards, plus dedicated `test-drawing` and `test-clipboard` jobs: the
+    98-test `tests/drawingBrowser.test.ts` loads the whole fixture per test, and the clipboard
+    files drive the system clipboard, so neither shares a runner with other browser files) as
+    parallel jobs on push to `main` and on PRs,
     cancelling superseded PR runs; a separate job lints the PR title with commitlint (PRs land on
     `main` as a squash, so the PR title becomes the commit subject). `workflow_dispatch` runs the
     pipeline on a branch without an empty commit. Test jobs have a 15-minute hard timeout and

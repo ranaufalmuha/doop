@@ -6,18 +6,25 @@ What to do when a `test` job fails or hangs. The pipeline is
 
 ## How the tests are split
 
-| Check                   | Runs                                                                                      | Normal wall clock  |
-| ----------------------- | ----------------------------------------------------------------------------------------- | ------------------ |
-| `test (1)` … `test (4)` | the `parallel` + `clipboard` projects (`--project parallel --project clipboard`), sharded | ~2-3 min per shard |
-| `test-drawing`          | the `drawing` project alone: `tests/drawingBrowser.test.ts`, no file parallelism          | ~2-4 min           |
-| `tests`                 | aggregator: green only when all five jobs above are green                                 | seconds            |
+| Check                   | Runs                                                                             | Normal wall clock  |
+| ----------------------- | -------------------------------------------------------------------------------- | ------------------ |
+| `test (1)` … `test (4)` | the `parallel` project (`--project parallel`), sharded four ways                 | ~2-3 min per shard |
+| `test-drawing`          | the `drawing` project alone: `tests/drawingBrowser.test.ts`, no file parallelism | ~2-4 min           |
+| `test-clipboard`        | the `clipboard` project alone: the files that drive the real system clipboard    | ~1-2 min           |
+| `tests`                 | aggregator: green only when all six jobs above are green                         | seconds            |
 
-`drawingBrowser` is 98 tests that each reload the whole Stage fixture, so it
-gets a runner to itself. The split lives in `vite.config.ts` as three projects
+`drawingBrowser` is 98 tests that each load the whole Stage fixture, so it gets
+a runner to itself. The split lives in `vite.config.ts` as three projects
 (`parallel`, `clipboard`, `drawing`), not in a `--exclude` flag: an inline
 project's `exclude` overrides the CLI one, so an exclude flag silently leaves
-the file in every shard. The shard jobs select `parallel` + `clipboard`; the
-dedicated job selects `drawing`.
+the file in every shard. The shard jobs select `parallel`; the dedicated jobs
+select `drawing` and `clipboard`.
+
+The clipboard project must also be alone: Chromium windows in one runner share
+the system clipboard, so a parallel file's copy replaces what a clipboard test
+is about to paste (runs `42600915322`, `42612259103`). Its own job removes that
+race, and the clipboard tests read the text back after `writeText` before
+pressing ⌘V.
 
 Sharing a 2-vCPU runner with the other Chromium files is what produced the
 11-minute job and the `Hook timed out in 30000ms` cascade in
@@ -25,11 +32,12 @@ Sharing a 2-vCPU runner with the other Chromium files is what produced the
 `fix(test): root out the flaky browser tests in CI (#394)` and
 `fix(canvas): root out the two browser tests that flake on CI (#433)`).
 
-Both kinds of test job have `timeout-minutes: 15`, so a wedged browser fails
-the run instead of sitting there until a newer push cancels it.
+Every test job has `timeout-minutes: 15`, so a wedged browser fails the run
+instead of sitting there until a newer push cancels it.
 
-If a `test (N)` log ever shows `tests/drawingBrowser.test.ts (98 tests)`, the
-project config regressed: the file must only appear in `test-drawing`.
+If a `test (N)` log ever shows `tests/drawingBrowser.test.ts (98 tests)` or
+`tests/canvasClipboardBrowser.test.ts`, the project config regressed: those
+files must only appear in `test-drawing` / `test-clipboard`.
 
 ## Symptom: the run sits in `test-drawing` with no new output
 
@@ -138,7 +146,7 @@ gh run list --branch <branch> --workflow ci.yml --limit 5
 ```
 
 For this fix the bar is five consecutive **non-retried** green runs of
-`test-drawing` (and the shard jobs) on the branch, then five more green runs
+the test jobs (`test (1..4)`, `test-drawing`, `test-clipboard`) on the branch, then five more green runs
 on `paperclip` before the issue is closed.
 
 ## Rollback
