@@ -156,7 +156,7 @@ describe.skipIf(!findBrowserPath())('drawing on the canvas', { timeout: 30_000 }
       } catch (error) {
         const recent = networkIssues.slice(-5).join('; ')
         const reason = error instanceof Error ? error.message : String(error)
-        throw new Error(recent ? `${reason} [network: ${recent}]` : reason)
+        throw new Error(recent ? `${reason} [network: ${recent}]` : reason, { cause: error })
       }
     })
     await phase('seed the canvas', () =>
