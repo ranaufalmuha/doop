@@ -73,6 +73,9 @@ export interface AgentRunner {
   online?: boolean
   /** what the connection runs on when a pick names no model */
   model: string
+  /** false on a custom provider whose model cannot see screenshots; the
+   *  composer says so rather than promising a visual review */
+  vision?: boolean
   effort?: string
   models: RunnerOption[]
   /** the effort dial, where the provider has one */

@@ -197,6 +197,9 @@ export const ACCOUNT_KIND_LABELS = {
   'anthropic-key': 'Claude API',
   'openrouter-key': 'OpenRouter',
   'gemini-key': 'Gemini',
+  /* one OpenAI-compatible endpoint of the user's own: 9Router, LiteLLM, a
+     local Ollama — its label is what the Settings row and composer show */
+  custom: 'Custom provider',
 } as const
 
 export type AccountKindName = keyof typeof ACCOUNT_KIND_LABELS

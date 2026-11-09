@@ -5,7 +5,7 @@ import { eq, sql } from 'drizzle-orm'
 import { db } from './db/index.ts'
 import { residentUsage } from './db/schema.ts'
 import { oauthAccessToken } from './db/auth-schema.ts'
-import type { AccountKind } from './modelAccounts.ts'
+import type { RunnerProvider } from '../shared/agentRunner.ts'
 
 /**
  * Free-tier metering for the resident design team. Anything that triggers
@@ -35,7 +35,7 @@ export interface Allowance {
   /** the user connected a model account the Doop Agent can run on */
   byoModel: boolean
   /** which kind, for the UI copy */
-  byoKind?: AccountKind | 'claude-local' | 'gemini-cloud'
+  byoKind?: RunnerProvider | 'gemini-cloud'
   /** the default account's email, so the UI can name what is connected */
   byoEmail?: string
   /** the agent is running on this user's own account right now — connecting

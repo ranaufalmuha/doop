@@ -151,8 +151,10 @@ export async function getAccounts(userId: string): Promise<ModelAccount[]> {
   return rows.map(toAccount).filter((account): account is ModelAccount => account !== null)
 }
 
-/** One provider's account, switched on or off, or null when not connected. */
-export async function getAccount(userId: string, kind: AccountKind): Promise<ModelAccount | null> {
+/** One provider's account, switched on or off, or null when not connected.
+ *  `custom` is part of the runner/default surface even before its transport
+ *  lands; a build without that kind reads the row as disconnected. */
+export async function getAccount(userId: string, kind: AccountKind | 'custom'): Promise<ModelAccount | null> {
   const [row] = await db
     .select()
     .from(modelAccounts)

@@ -145,11 +145,13 @@ export interface Allowance {
   byoModel: boolean
   byoKind?: ModelAccountKind | 'claude-local' | 'gemini-cloud'
   byoEmail?: string
+  /** a custom provider's own label, so the meter names "9Router" not "custom" */
+  byoLabel?: string
   /** free tasks are spent and their own account is carrying the agent */
   onOwnAccount: boolean
 }
 
-export type ModelAccountKind = 'chatgpt' | 'openai-key' | 'anthropic-key' | 'openrouter-key' | 'gemini-key'
+export type ModelAccountKind = 'chatgpt' | 'openai-key' | 'anthropic-key' | 'openrouter-key' | 'gemini-key' | 'custom'
 
 /** An in-flight device sign-in: the user types `userCode` at `verificationUrl`
  *  and the server polls OpenAI until they approve. */
@@ -189,8 +191,32 @@ export interface ModelAccountStatus {
   model?: string
   /** the reasoning effort in effect; only the OpenAI kinds have one */
   effort?: string
+  /** a custom provider's display name (1–40 characters) */
+  label?: string
+  /** a custom provider's stored origin, echoed back after normalization */
+  baseUrl?: string
+  /** a custom provider: whether runs may send screenshots to it */
+  vision?: boolean
+  /** a custom provider's per-account completion budget */
+  maxOutputTokens?: number
   connectedAt: number
 }
+
+/** A custom provider as the connect form sends it. `apiKey` may be omitted
+ *  (a keyless local gateway); a blank string clears a stored key. */
+export interface CustomProviderInput {
+  baseUrl: string
+  label: string
+  apiKey?: string
+  model?: string
+  vision?: boolean
+  maxOutputTokens?: number
+}
+
+/** One field change on a connected custom provider; the server accepts
+ *  exactly one per PATCH. */
+export type CustomProviderPatch =
+  { model: string } | { vision: boolean } | { maxOutputTokens: number } | { enabled: boolean }
 
 /** The Settings pane's view: every connected account, on or off, and which
  *  connection runs work nobody picked one for. */
@@ -199,6 +225,11 @@ export interface ModelAccounts {
   default?: RunnerProvider
   /** false when the server has switched the ChatGPT flow off */
   chatgptEnabled: boolean
+  /** false when CUSTOM_ENDPOINT_POLICY=off hides the custom provider row */
+  customEnabled?: boolean
+  /** what custom base URLs the server accepts: public https only, or a
+   *  self-host that also allows private http origins */
+  policy?: 'off' | 'public' | 'private'
   /** the curated menu each provider's picker offers */
   menus: Record<ModelAccountKind, AgentModelOption[]>
 }
@@ -575,6 +606,12 @@ export const api = {
     req<ModelAccounts>('/api/model-account/openrouter-key', { method: 'POST', body: JSON.stringify({ apiKey }) }),
   connectGeminiKey: (apiKey: string) =>
     req<ModelAccounts>('/api/model-account/gemini-key', { method: 'POST', body: JSON.stringify({ apiKey }) }),
+  /** one custom OpenAI-compatible endpoint: connect or replace, same route */
+  connectCustomProvider: (input: CustomProviderInput) =>
+    req<ModelAccounts>('/api/model-account/custom', { method: 'POST', body: JSON.stringify(input) }),
+  updateCustomProvider: (patch: CustomProviderPatch) =>
+    req<ModelAccounts>('/api/model-account/custom', { method: 'PATCH', body: JSON.stringify(patch) }),
+  disconnectCustomProvider: () => req<ModelAccounts>('/api/model-account/custom', { method: 'DELETE' }),
   disconnectModelAccount: (kind: ModelAccountKind) =>
     req<ModelAccounts>(`/api/model-account/${kind}`, { method: 'DELETE' }),
   setAgentModel: (kind: ModelAccountKind, model: string) =>
