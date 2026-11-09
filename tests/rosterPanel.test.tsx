@@ -22,6 +22,7 @@ const MENUS = {
   'anthropic-key': [],
   'openrouter-key': OPENROUTER_MODELS,
   'gemini-key': GEMINI_MODELS,
+  custom: [],
 }
 vi.mock('../src/lib/auth', () => ({ authClient: { useSession: () => ({ data: { user: { id: 'alice' } } }) } }))
 vi.mock('../src/lib/api', () => ({

@@ -4,9 +4,25 @@ import { isDesktopShell } from '../lib/shell'
 import { Fragment, useCallback, useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { api } from '../lib/api'
-import type { AgentModelCatalog, AgentModelOption, DeviceFlow, ModelAccountKind, ModelAccounts } from '../lib/api'
+import type {
+  AgentModelCatalog,
+  AgentModelOption,
+  CustomProviderInput,
+  CustomProviderPatch,
+  DeviceFlow,
+  ModelAccountKind,
+  ModelAccounts,
+} from '../lib/api'
 import type { RunnerProvider } from '../../shared/agentRunner'
-import { AvailableRow, ConnectionRow, FieldError, ConnectionSection, ModelSelect } from './ConnectionTable'
+import {
+  AvailableRow,
+  ConnectionRow,
+  FieldError,
+  ConnectionSection,
+  ModelSelect,
+  type ModelChoice,
+} from './ConnectionTable'
+import { CustomProviderEntry } from './CustomProviderSettings'
 import { useLocalAgent } from '../lib/localAgent'
 import { posthog } from '../lib/posthog'
 import { useStore } from '../lib/store'
@@ -174,7 +190,9 @@ export function ModelAccountPanel({ onChange }: { onChange?: () => void }) {
   const desktop = isDesktopShell()
   const { view, refresh, set } = useModelAccounts()
   const localState = useLocalAgent()
-  const [showKey, setShowKey] = useState<false | Exclude<ModelAccountKind, 'chatgpt'>>(false)
+  const [showKey, setShowKey] = useState<false | 'openai-key' | 'anthropic-key' | 'openrouter-key' | 'gemini-key'>(
+    false,
+  )
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   /* the connection a failure belongs to, so it shows under that row or
@@ -182,7 +200,12 @@ export function ModelAccountPanel({ onChange }: { onChange?: () => void }) {
   const [errorAt, setErrorAt] = useState<ModelAccountKind | null>(null)
   /* bumped by `settle`, so a rotated key reloads the catalog it unlocks */
   const [catalogGeneration, setCatalogGeneration] = useState(0)
-  const catalogs = useAgentCatalogs(view?.accounts.map((a) => a.kind) ?? [], catalogGeneration)
+  /* a stored custom row kept while the policy is off has no catalog route
+     (it answers 404), so that kind is never asked for one */
+  const catalogKinds = (view?.accounts ?? [])
+    .map((account) => account.kind)
+    .filter((kind) => view?.customEnabled !== false || kind !== 'custom')
+  const catalogs = useAgentCatalogs(catalogKinds, catalogGeneration)
   const [authUrl, setAuthUrl] = useState('')
   /* true while the server is listening on the loopback callback port for us —
      the user approves in the other tab and this one just flips */
@@ -250,16 +273,23 @@ export function ModelAccountPanel({ onChange }: { onChange?: () => void }) {
   }
 
   /* one request that answers with the whole view; a failure re-reads it and
-     shows under the connection it was about */
-  const act = async (at: ModelAccountKind | null, request: () => Promise<ModelAccounts>, done?: () => void) => {
+     shows under the connection it was about. Answers whether it landed, so a
+     form only closes on success. */
+  const act = async (
+    at: ModelAccountKind | null,
+    request: () => Promise<ModelAccounts>,
+    done?: () => void,
+  ): Promise<boolean> => {
     setBusy(true)
     setError('')
     try {
       settle(await request())
       done?.()
+      return true
     } catch (e) {
       fail(e, at)
       refresh()
+      return false
     } finally {
       setBusy(false)
     }
@@ -366,6 +396,31 @@ export function ModelAccountPanel({ onChange }: { onChange?: () => void }) {
       () => posthog.capture('agent_default_changed', { provider }),
     )
 
+  /* the custom OpenAI-compatible endpoint: connect/replace, one-field PATCH
+     and disconnect all answer with the whole Settings view */
+  const connectCustom = (input: CustomProviderInput) =>
+    act(
+      'custom',
+      () => api.connectCustomProvider(input),
+      () => posthog.capture('custom_provider_connected'),
+    )
+  const patchCustom = (patch: CustomProviderPatch) =>
+    act(
+      'custom',
+      () => api.updateCustomProvider(patch),
+      () => posthog.capture('custom_provider_changed', { field: Object.keys(patch)[0] }),
+    )
+  const disconnectCustom = () =>
+    act(
+      'custom',
+      () => api.disconnectCustomProvider(),
+      () => posthog.capture('custom_provider_disconnected'),
+    )
+  const clearCustomError = () => {
+    setError('')
+    setErrorAt(null)
+  }
+
   if (!view) return null
 
   /* the failure that belongs to this connection, if any */
@@ -450,7 +505,7 @@ export function ModelAccountPanel({ onChange }: { onChange?: () => void }) {
   )
 
   const keyRow = (cfg: {
-    kind: Exclude<ModelAccountKind, 'chatgpt'>
+    kind: Exclude<ModelAccountKind, 'chatgpt' | 'custom'>
     title: string
     /** the card's one line, before it is connected */
     short: string
@@ -649,6 +704,19 @@ export function ModelAccountPanel({ onChange }: { onChange?: () => void }) {
     onChange: refresh,
   }
 
+  /* the custom provider's dropdown: the live catalog (each entry stamped
+     with the account's vision flag), else just the stored id — never an
+     empty picker */
+  const customAccount = accountOf('custom')
+  const customMenu = (): ModelChoice[] => {
+    if (!customAccount) return []
+    const catalog = catalogs.custom
+    const vision = customAccount.vision === true
+    if (catalog?.live && catalog.models.length > 0) return catalog.models.map((model) => ({ ...model, vision }))
+    if (customAccount.model) return [{ id: customAccount.model, name: customAccount.model, blurb: '', vision }]
+    return []
+  }
+
   const entries: Entry[] = []
   if (view.chatgptEnabled !== false) {
     entries.push(
@@ -740,6 +808,33 @@ export function ModelAccountPanel({ onChange }: { onChange?: () => void }) {
       placeholder: 'sk-ant-…',
     }),
   )
+  /* the self-hosted OpenAI-compatible endpoint: normally a connect/edit row;
+     when the server's CUSTOM_ENDPOINT_POLICY is off it is hidden unless a
+     connection is already stored, and then it only offers Remove (POST,
+     PATCH and the model catalog all answer 404 while off) */
+  const customOff = view.customEnabled === false
+  if (!customOff || customAccount) {
+    entries.push({
+      connected: !!customAccount,
+      node: (
+        <CustomProviderEntry
+          key="custom"
+          view={view}
+          account={customAccount}
+          models={customOff ? [] : customMenu()}
+          catalogError={customAccount && !customOff ? catalogs.custom?.error : undefined}
+          busy={busy}
+          error={errorFor('custom')}
+          policyOff={customOff}
+          onSubmit={connectCustom}
+          onPatch={patchCustom}
+          onMakeDefault={() => void makeDefault('custom')}
+          onDisconnect={disconnectCustom}
+          onClearError={clearCustomError}
+        />
+      ),
+    })
+  }
   const connected = entries.filter((entry) => entry.connected)
   const unconnected = entries.filter((entry) => !entry.connected)
 

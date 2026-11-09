@@ -111,6 +111,7 @@ export const home: Catalog['home'] = {
   meterClaudeLocal: 'Doop Agent no seu Claude CLI local',
   meterChatgpt: 'Doop Agent no seu ChatGPT',
   meterProviderKey: 'Doop Agent na sua chave da {provider}',
+  meterCustom: 'Doop Agent na sua conexão {provider}',
   meterNoFreeTier: 'Conecte um plano em Configurações para usar o Doop Agent',
   meterUsedUp: 'Tarefas gratuitas do Doop Agent esgotadas — conecte o ChatGPT para continuar',
   meterUsedUpLine: 'tarefas gratuitas do Doop Agent esgotadas — conecte o ChatGPT para continuar',
