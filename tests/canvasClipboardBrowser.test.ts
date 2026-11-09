@@ -81,6 +81,15 @@ describe.skipIf(!findBrowserPath() || !CLIPBOARD_IS_RELIABLE)('canvas clipboard 
     })
   }
 
+  /* writeText resolves before the system clipboard is necessarily readable
+     again: the paste event can still see the previous contents and the app
+     then pastes its own stale element (runs 42600915322, 42612259103). Read the
+     text back before pressing the chord. */
+  async function writeClipboardText(text: string) {
+    await page.evaluate((text) => navigator.clipboard.writeText(text), text)
+    await page.waitForFunction(async (text) => (await navigator.clipboard.readText()) === text, {}, text)
+  }
+
   /* the frame's name at its left end: a picked element near the frame's
      top wears its toolbar over the middle of the name, clear of the rotate
      zones, and a centre click would land on the toolbar */
@@ -174,7 +183,7 @@ describe.skipIf(!findBrowserPath() || !CLIPBOARD_IS_RELIABLE)('canvas clipboard 
     await page.waitForSelector('iframe[data-doop-frame]')
     const doc = (await (await page.$('iframe[data-doop-frame]'))!.contentFrame())!
     await doc.waitForSelector('#card')
-    await page.evaluate(() => navigator.clipboard.writeText('external text'))
+    await writeClipboardText('external text')
   })
 
   afterAll(async () => {
@@ -209,7 +218,7 @@ describe.skipIf(!findBrowserPath() || !CLIPBOARD_IS_RELIABLE)('canvas clipboard 
   it('does not paste an old element when external text replaced the clipboard', async () => {
     await page.evaluate(() => window.canvasClipboardHarness.pick('#card'))
     await chord('c')
-    await page.evaluate(() => navigator.clipboard.writeText('new external text'))
+    await writeClipboardText('new external text')
     await chord('v')
     await page.evaluate(
       () => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))),
