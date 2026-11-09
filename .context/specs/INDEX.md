@@ -6,6 +6,10 @@ lists every file in this folder.
 
 ## Active
 
+- [custom-model-providers.md](custom-model-providers.md) - Custom OpenAI-compatible model providers
+  (9Router, LiteLLM, vLLM, any base URL) for the Doop Agent: one `custom` model account, a
+  normalized and SSRF-screened base URL, catalog with manual model-id fallback, vision toggle,
+  Settings and composer, API contract and acceptance criteria.
 - [design-tokens.md](design-tokens.md) - Design tokens and themes: Paper's eleven token types as
   CSS custom properties per canvas, the managed `<style data-doop-tokens>` block every frame
   carries, propagation as annotation writes, modes via `data-doop-mode`, REST + MCP + the
