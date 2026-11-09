@@ -96,6 +96,11 @@ export class ModelAuthError extends Error {}
  *  different tier in Settings, not a reconnect. */
 export class ModelUnavailableError extends Error {}
 
+/** The connection itself is misconfigured or unreachable (a bad custom
+ *  endpoint, DNS/refused/TLS): reconnecting is the fix, but it is not a bad
+ *  credential, so it extends ModelAuthError for the existing resident paths. */
+export class ModelConfigurationError extends ModelAuthError {}
+
 /* how the OpenAI-shaped surfaces phrase "no such model for you": the API's
    `model_not_found` code, the Codex backend's prose about the model not
    existing / access, OpenRouter's endpoint/data-policy refusals and id
@@ -445,7 +450,7 @@ export async function runAzureTurn(config: AzureConfig, req: TurnRequest): Promi
 }
 
 const transports: Record<
-  Exclude<ModelAccount['kind'], 'anthropic-key' | 'openrouter-key' | 'gemini-key'>,
+  Exclude<ModelAccount['kind'], 'anthropic-key' | 'openrouter-key' | 'gemini-key' | 'custom'>,
   (account: ModelAccount, req: TurnRequest) => Promise<TurnResult>
 > = {
   chatgpt: runChatgpt,
@@ -453,7 +458,12 @@ const transports: Record<
 }
 
 export function runOpenAiTurn(account: ModelAccount, req: TurnRequest): Promise<TurnResult> {
-  if (account.kind === 'anthropic-key' || account.kind === 'openrouter-key' || account.kind === 'gemini-key') {
+  if (
+    account.kind === 'anthropic-key' ||
+    account.kind === 'openrouter-key' ||
+    account.kind === 'gemini-key' ||
+    account.kind === 'custom'
+  ) {
     throw new Error(`${account.kind} accounts do not use the OpenAI transport`)
   }
   return transports[account.kind](account, req)

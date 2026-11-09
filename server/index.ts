@@ -82,6 +82,8 @@ import { imageModelAvailability, serverImageGenEnabled } from './imageGen.ts'
 import { setImagePref } from './imagePrefs.ts'
 import { accountsView, listRunners, MODEL_MENUS } from './agentRunners.ts'
 import { setStoredDefault } from './agentDefaults.ts'
+import { connectCustom, customCatalogFor, CustomRateLimitError, patchCustom } from './customProvider.ts'
+import { customEndpointsEnabled } from './customEndpoint.ts'
 import { isRunnerProvider } from '../shared/agentRunner.ts'
 import { modelCatalogFor } from './modelCatalog.ts'
 import { mentionedRole } from '../shared/agents.ts'
@@ -968,7 +970,9 @@ app.put('/api/agent-runners/default', async (req, res) => {
     const usable =
       provider === 'claude-local'
         ? (await getLocalAgentPreference(userId)).enabled
-        : (await modelAccounts.getAccount(userId, provider))?.enabled
+        : provider === 'custom' && !customEndpointsEnabled()
+          ? false
+          : (await modelAccounts.getAccount(userId, provider))?.enabled
     if (!usable) return res.status(400).json({ error: 'connect and switch that on first' })
     await setStoredDefault(userId, provider)
     res.json(await accountsView(userId))
@@ -989,9 +993,60 @@ app.get('/api/model-account', (req, res) => {
     .catch(() => res.status(500).json({ error: 'account status unavailable' }))
 })
 
+/* ---- custom OpenAI-compatible provider: one connection per user. These are
+   registered before the generic `/:kind` handlers because Express matches in
+   registration order; a later custom route would be shadowed. ---- */
+function customDisabled(res: express.Response): boolean {
+  if (customEndpointsEnabled()) return false
+  res.status(404).json({ error: 'Custom provider connections are disabled on this server' })
+  return true
+}
+
+app.post('/api/model-account/custom', async (req, res) => {
+  if (customDisabled(res)) return
+  try {
+    const userId = req.user!.id
+    await connectCustom(userId, (req.body ?? {}) as Record<string, unknown>)
+    res.json(await accountsView(userId))
+    wakeUserWork(userId)
+  } catch (e) {
+    if (e instanceof CustomRateLimitError) return res.status(429).json({ error: e.message })
+    res.status(400).json({ error: e instanceof Error ? e.message : 'could not connect that provider' })
+  }
+})
+
+app.patch('/api/model-account/custom', async (req, res) => {
+  if (customDisabled(res)) return
+  try {
+    const userId = req.user!.id
+    const enabled = await patchCustom(userId, (req.body ?? {}) as Record<string, unknown>)
+    res.json(await accountsView(userId))
+    /* switching it on can make queued work runnable */
+    if (enabled) wakeUserWork(userId)
+  } catch (e) {
+    res.status(400).json({ error: e instanceof Error ? e.message : 'could not change that account' })
+  }
+})
+
+app.delete('/api/model-account/custom', async (req, res) => {
+  if (customDisabled(res)) return
+  await modelAccounts.disconnect(req.user!.id, 'custom')
+  res.json(await accountsView(req.user!.id))
+})
+
 app.get('/api/model-account/models', async (req, res) => {
   try {
     const kind: unknown = req.query.kind
+    /* the custom kind must branch before the built-in lookup (and before the
+       `off` policy), or it would fall through to the generic handlers */
+    if (kind === 'custom') {
+      if (!customEndpointsEnabled()) {
+        return res.status(404).json({ error: 'Custom provider connections are disabled on this server' })
+      }
+      const account = await modelAccounts.getAccount(req.user!.id, 'custom')
+      if (!account) return res.json({ models: [], live: false })
+      return res.json(await customCatalogFor(account))
+    }
     if (!modelAccounts.isAccountKind(kind)) return res.status(400).json({ error: 'unknown account kind' })
     const account = await modelAccounts.getAccount(req.user!.id, kind)
     if (!account) return res.json({ models: [], live: false })

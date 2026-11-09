@@ -7,9 +7,17 @@ import type { RunnerPick } from '../shared/agentRunner.ts'
 import Anthropic from '@anthropic-ai/sdk'
 import { withFreshToken, accountModelFor, accountVisionFor, accountWithPick } from './modelAccounts.ts'
 import type { AccountKind, ModelAccount } from './modelAccounts.ts'
-import { ModelAuthError, ModelUnavailableError, effortFor, runAzureTurn, runOpenAiTurn } from './openaiAgent.ts'
+import {
+  ModelAuthError,
+  ModelConfigurationError,
+  ModelUnavailableError,
+  effortFor,
+  runAzureTurn,
+  runOpenAiTurn,
+} from './openaiAgent.ts'
 import type { StopReason, TurnBlock } from './openaiAgent.ts'
 import { geminiConfig, openrouterConfig, runChatCompletionsTurn } from './chatCompletionsAgent.ts'
+import { customChatConfig } from './customProvider.ts'
 
 /**
  * Which model runs a Doop Agent turn, and on whose bill.
@@ -60,8 +68,7 @@ export interface AgentModel {
   run(req: AgentTurnRequest): Promise<AgentTurnResult>
 }
 
-export { ModelAuthError, ModelUnavailableError }
-export class ModelConfigurationError extends ModelAuthError {}
+export { ModelAuthError, ModelUnavailableError, ModelConfigurationError }
 
 /* ---------------------------------------------------------------- */
 /* the server tier: pays for everyone's free tasks                  */
@@ -203,6 +210,7 @@ const BYO_LABELS: Record<AccountKind, string> = {
   'anthropic-key': 'Claude API',
   'openrouter-key': 'OpenRouter',
   'gemini-key': 'Gemini',
+  custom: 'Custom provider',
 }
 
 /* the OpenAI-shaped transports take one system string; cache breakpoints are
@@ -212,6 +220,24 @@ function joinSystem(req: AgentTurnRequest): string {
 }
 
 function byoModel(account: ModelAccount): AgentModel {
+  if (account.kind === 'custom') {
+    const config = customChatConfig(account)
+    const vision = accountVisionFor(account)
+    return {
+      provider: 'custom',
+      label: `${account.label || BYO_LABELS.custom} (${accountModelFor(account)})`,
+      userId: account.userId,
+      vision,
+      run: (req) =>
+        runChatCompletionsTurn(config, {
+          system: joinSystem(req),
+          tools: req.tools,
+          messages: req.messages,
+          maxTokens: req.maxTokens,
+          signal: req.signal,
+        }),
+    }
+  }
   if (account.kind === 'anthropic-key') {
     if (!account.apiKey) throw new ModelAuthError('Reconnect your Claude API key in Settings.')
     const client = new Anthropic({ apiKey: account.apiKey })

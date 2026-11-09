@@ -83,6 +83,23 @@
   family filter for reasoning chat models with tools, images and a 16k output window; a picked id
   only has to be shaped like the provider's, and the run is the final check. OpenRouter stays on
   its curated roster (the run-time vision check knows only the roster's flags).
+- Custom OpenAI-compatible providers (`server/customEndpoint.ts`, `server/customProvider.ts`,
+  migration `0049_custom_model_provider`): one `model_accounts` row per user with `kind='custom'`,
+  the stored origin (`base_url`), display `label`, `vision` and `max_output_tokens` (default 8192,
+  1024–16000). The server-level `CUSTOM_ENDPOINT_POLICY` is `off` / `public` (https + global
+  addresses, the Doop Cloud setting) / `private` (self-host: also `http` and loopback/RFC1918/ULA);
+  cloud metadata ranges are blocked under either policy. Every origin is screened at save time and
+  on every request — scheme, no credentials/query/fragment, origin or `/v1` root only, DNS
+  classification, then connect to the classified IP through a pinned dispatcher. Only the literal
+  `/v1/models` and `/v1/chat/completions` paths are ever requested, redirects are never followed,
+  bodies are byte-capped (2 MiB catalog, 8 MiB completion) and timeouts are hard. Connect writes
+  nothing until one probe proves the endpoint, key, model id and a `doop_ping` tool call (and a
+  1×1 image when vision is claimed); `/v1/models` is only a suggestion list. Runs use
+  `ChatCompletionsConfig.guarded`, the account's `max_tokens` budget and its vision flag; the key
+  stays `sealedText` and is absent from every status/view body. Tests:
+  `customEndpoint.test.ts` (shape + classifier), `customProvider.test.ts` (connect/probe/policy/
+  routing), `customProviderTransport.test.ts` (guarded request + error classes),
+  `customProviderCatalog.test.ts` (advisory parse/filter/cap).
 - Reasoning effort on a user's OpenAI account (ChatGPT subscription or OpenAI key): the pick lives
   in `model_accounts.reasoning_effort` (`REASONING_EFFORTS` in `shared/modelMenu.ts`: low / medium /
   high / xhigh), set through `PATCH /api/model-account/:kind { effort }`, read by `effortFor` in
