@@ -5,9 +5,10 @@ import { CustomProviderEntry } from '@/components/CustomProviderSettings'
 
 /**
  * The custom OpenAI-compatible provider row in Settings → Doop Agent: the
- * add card, its connect form, and the connected tile (on, off, default). The
- * component is presentational, so the catalogue can show every state without
- * a server behind it.
+ * add card, its connect form, the connected tile (on, off, default), and the
+ * read-only row a stored connection keeps while the server's
+ * CUSTOM_ENDPOINT_POLICY is off. The component is presentational, so the
+ * catalogue can show every state without a server behind it.
  */
 const view = (overrides: Partial<ModelAccounts> = {}): ModelAccounts => ({
   accounts: [],
@@ -89,6 +90,23 @@ export const Off: Story = {
         view={view({ accounts: [{ ...account, enabled: false }] })}
         account={{ ...account, enabled: false }}
         models={[{ id: '9router/auto', name: '9router/auto', blurb: '', vision: false }]}
+        {...props}
+      />
+    </Frame>
+  ),
+}
+
+/** CUSTOM_ENDPOINT_POLICY=off with a connection stored earlier: the row stays
+ *  visible, read-only, with no model picker, switch or replace form, and a
+ *  Remove action that deletes the sealed key. */
+export const PolicyOffStored: Story = {
+  render: () => (
+    <Frame>
+      <CustomProviderEntry
+        view={view({ accounts: [{ ...account, enabled: false }], customEnabled: false, policy: 'off' })}
+        account={{ ...account, enabled: false }}
+        models={[]}
+        policyOff
         {...props}
       />
     </Frame>

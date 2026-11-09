@@ -355,6 +355,7 @@ export function CustomProviderEntry({
   catalogError,
   busy,
   error,
+  policyOff = false,
   onSubmit,
   onPatch,
   onMakeDefault,
@@ -368,6 +369,9 @@ export function CustomProviderEntry({
   catalogError?: string | undefined
   busy: boolean
   error?: string | undefined
+  /** the server's CUSTOM_ENDPOINT_POLICY is off: a stored row can only be
+   *  removed, since POST/PATCH and the model catalog answer 404 */
+  policyOff?: boolean
   onSubmit: (input: CustomProviderInput) => Promise<boolean>
   onPatch: (patch: CustomProviderPatch) => Promise<boolean>
   onMakeDefault: () => void
@@ -388,6 +392,64 @@ export function CustomProviderEntry({
   const meta = account
     ? [host, account.model || t('models.customNoModel'), t('models.customTokens', { n: budget })].join(' · ')
     : undefined
+
+  /* The feature is off on this server: a stored connection still shows so its
+     owner can delete the key, but every control that would call POST/PATCH or
+     the model catalog is absent — those routes answer 404 while off. */
+  if (policyOff) {
+    if (!account) return null
+    return (
+      <Fragment>
+        <AvailableRow
+          mark={<CustomMark />}
+          name={name}
+          sub={
+            <>
+              <span className="block truncate">{meta}</span>
+              <span className="block truncate">{t('models.customPolicyOffNote')}</span>
+            </>
+          }
+          action={
+            <Button
+              size="sm"
+              variant="danger"
+              onClick={() => {
+                onClearError()
+                setEditing('disconnect')
+              }}
+              disabled={busy}
+            >
+              {t('models.customRemove')}
+            </Button>
+          }
+          panel={error ? <FieldError>{error}</FieldError> : undefined}
+          open={!!error}
+        />
+        {editing === 'disconnect' && (
+          <Modal size="sm" onClose={close}>
+            <ModalTitle>{t('models.customPolicyOffTitle', { name })}</ModalTitle>
+            <ModalLede>{t('models.customPolicyOffLede')}</ModalLede>
+            <ModalActions>
+              <Button variant="ghost" onClick={close} disabled={busy}>
+                {t('common.cancel')}
+              </Button>
+              <Button
+                variant="primary"
+                disabled={busy}
+                onClick={() => {
+                  void onDisconnect().then((done) => {
+                    if (done) close()
+                  })
+                }}
+              >
+                {busy ? t('models.customRemoving') : t('models.customRemove')}
+              </Button>
+            </ModalActions>
+          </Modal>
+        )}
+      </Fragment>
+    )
+  }
 
   if (!account) {
     return (

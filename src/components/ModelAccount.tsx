@@ -200,7 +200,12 @@ export function ModelAccountPanel({ onChange }: { onChange?: () => void }) {
   const [errorAt, setErrorAt] = useState<ModelAccountKind | null>(null)
   /* bumped by `settle`, so a rotated key reloads the catalog it unlocks */
   const [catalogGeneration, setCatalogGeneration] = useState(0)
-  const catalogs = useAgentCatalogs(view?.accounts.map((a) => a.kind) ?? [], catalogGeneration)
+  /* a stored custom row kept while the policy is off has no catalog route
+     (it answers 404), so that kind is never asked for one */
+  const catalogKinds = (view?.accounts ?? [])
+    .map((account) => account.kind)
+    .filter((kind) => view?.customEnabled !== false || kind !== 'custom')
+  const catalogs = useAgentCatalogs(catalogKinds, catalogGeneration)
   const [authUrl, setAuthUrl] = useState('')
   /* true while the server is listening on the loopback callback port for us —
      the user approves in the other tab and this one just flips */
@@ -803,9 +808,12 @@ export function ModelAccountPanel({ onChange }: { onChange?: () => void }) {
       placeholder: 'sk-ant-…',
     }),
   )
-  /* the self-hosted OpenAI-compatible endpoint, hidden when the server's
-     CUSTOM_ENDPOINT_POLICY is off */
-  if (view.customEnabled !== false) {
+  /* the self-hosted OpenAI-compatible endpoint: normally a connect/edit row;
+     when the server's CUSTOM_ENDPOINT_POLICY is off it is hidden unless a
+     connection is already stored, and then it only offers Remove (POST,
+     PATCH and the model catalog all answer 404 while off) */
+  const customOff = view.customEnabled === false
+  if (!customOff || customAccount) {
     entries.push({
       connected: !!customAccount,
       node: (
@@ -813,10 +821,11 @@ export function ModelAccountPanel({ onChange }: { onChange?: () => void }) {
           key="custom"
           view={view}
           account={customAccount}
-          models={customMenu()}
-          catalogError={customAccount ? catalogs.custom?.error : undefined}
+          models={customOff ? [] : customMenu()}
+          catalogError={customAccount && !customOff ? catalogs.custom?.error : undefined}
           busy={busy}
           error={errorFor('custom')}
+          policyOff={customOff}
           onSubmit={connectCustom}
           onPatch={patchCustom}
           onMakeDefault={() => void makeDefault('custom')}

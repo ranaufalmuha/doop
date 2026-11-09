@@ -225,7 +225,8 @@ export interface ModelAccounts {
   default?: RunnerProvider
   /** false when the server has switched the ChatGPT flow off */
   chatgptEnabled: boolean
-  /** false when CUSTOM_ENDPOINT_POLICY=off hides the custom provider row */
+  /** false when the server's CUSTOM_ENDPOINT_POLICY is off: no connect or
+   *  edit, but a stored row is still listed so its owner can remove it */
   customEnabled?: boolean
   /** what custom base URLs the server accepts: public https only, or a
    *  self-host that also allows private http origins */

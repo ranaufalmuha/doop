@@ -99,6 +99,14 @@ export const models = {
   customDisconnectLede:
     'Its key is deleted from the server and the composer stops listing it. You can connect it again later.',
   customDisconnecting: 'Disconnecting…',
+  /* a stored custom row while the server's CUSTOM_ENDPOINT_POLICY is off:
+     the connection can only be removed, never reconnected from here */
+  customPolicyOffNote: 'Custom endpoints are turned off on this server — only removal is available.',
+  customRemove: 'Remove',
+  customRemoving: 'Removing…',
+  customPolicyOffTitle: 'Remove {name}?',
+  customPolicyOffLede:
+    'Its stored key is deleted from the server. Custom endpoints are turned off, so it cannot be reconnected until an operator enables them.',
   saveKey: 'Save key',
   deviceStep1Before: 'One-time setup: turn on ',
   deviceStep1Bold: 'device code authorization',

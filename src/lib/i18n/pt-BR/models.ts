@@ -100,6 +100,14 @@ export const models: Catalog['models'] = {
   customDisconnectLede:
     'A chave é apagada do servidor e o compositor deixa de listá-la. Você pode conectar de novo mais tarde.',
   customDisconnecting: 'Desconectando…',
+  /* uma linha personalizada guardada com CUSTOM_ENDPOINT_POLICY=off no
+     servidor: a conexão só pode ser removida, nunca reconectada por aqui */
+  customPolicyOffNote: 'Os endpoints personalizados estão desligados neste servidor — só é possível remover.',
+  customRemove: 'Remover',
+  customRemoving: 'Removendo…',
+  customPolicyOffTitle: 'Remover {name}?',
+  customPolicyOffLede:
+    'A chave guardada é apagada do servidor. Os endpoints personalizados estão desligados, então não será possível reconectar até que um operador os ative.',
   saveKey: 'Salvar chave',
   deviceStep1Before: 'Configuração única: ative a ',
   deviceStep1Bold: 'autorização por código de dispositivo',

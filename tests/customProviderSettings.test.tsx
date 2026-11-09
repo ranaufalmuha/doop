@@ -244,3 +244,33 @@ it('asks before disconnecting a custom provider', async () => {
   expect(mocks.disconnect).toHaveBeenCalledOnce()
   expect(container.textContent).not.toContain('api.9router.dev')
 })
+
+it('keeps a stored custom row removable while custom endpoints are off', async () => {
+  const stored = { ...connected({ enabled: false }), customEnabled: false, policy: 'off' as const }
+  mocks.accounts.mockResolvedValue(stored)
+  mocks.disconnect.mockResolvedValue({ ...empty(), customEnabled: false, policy: 'off' })
+  await act(async () => root.render(<ModelAccountPanel />))
+
+  const customRow = Array.from(container.querySelectorAll<HTMLElement>('[role="listitem"]')).find((el) =>
+    el.textContent?.includes('9Router'),
+  )!
+  /* the row keeps its label, model and base URL, and says why it is read-only */
+  expect(customRow.textContent).toContain('9Router')
+  expect(customRow.textContent).toContain('api.9router.dev')
+  expect(customRow.textContent).toContain('9router/auto')
+  expect(customRow.textContent).toContain('turned off')
+  /* nothing that would call POST/PATCH or the 404 catalog while off */
+  expect(customRow.querySelector('[role="switch"]')).toBeNull()
+  expect(customRow.querySelector('[aria-label^="Model for"]')).toBeNull()
+  expect(customRow.querySelector('[aria-label^="More for"]')).toBeNull()
+  expect(container.textContent).not.toContain('Custom provider (OpenAI-compatible)')
+  expect(mocks.models).not.toHaveBeenCalledWith('custom')
+
+  const remove = Array.from(customRow.querySelectorAll('button')).find((b) => b.textContent === 'Remove')!
+  await act(async () => remove.click())
+  /* removal deletes the sealed key, so it confirms first */
+  expect(mocks.disconnect).not.toHaveBeenCalled()
+  await submit('Remove')
+  expect(mocks.disconnect).toHaveBeenCalledOnce()
+  expect(container.textContent).not.toContain('api.9router.dev')
+})
