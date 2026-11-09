@@ -23,8 +23,10 @@ select `drawing` and `clipboard`.
 The clipboard project must also be alone: Chromium windows in one runner share
 the system clipboard, so a parallel file's copy replaces what a clipboard test
 is about to paste (runs `42600915322`, `42612259103`). Its own job removes that
-race, and the clipboard tests read the text back after `writeText` before
-pressing ⌘V.
+race. The clipboard tests wait for the copy token before replacing the
+clipboard, and the replacement-paste case dispatches a synthetic `paste` event
+carrying the external text — the OS clipboard cannot be replaced and observed
+atomically in headless Chromium.
 
 Sharing a 2-vCPU runner with the other Chromium files is what produced the
 11-minute job and the `Hook timed out in 30000ms` cascade in

@@ -90,6 +90,17 @@ describe.skipIf(!findBrowserPath() || !CLIPBOARD_IS_RELIABLE)('canvas clipboard 
     await page.waitForFunction(async (text) => (await navigator.clipboard.readText()) === text, {}, text)
   }
 
+  /* The copy handler writes its token to the system clipboard asynchronously
+     (`writeCanvasClipboard`). Replacing the clipboard before that write lands
+     lets it overwrite the new text, so the paste still sees the token and
+     pastes the old element. Wait for the token to land first. */
+  async function waitForCopyToken() {
+    await page.waitForFunction(async () => {
+      const token = localStorage.getItem('doop:clipboard-token')
+      return !!token && (await navigator.clipboard.readText()) === token
+    })
+  }
+
   /* the frame's name at its left end: a picked element near the frame's
      top wears its toolbar over the middle of the name, clear of the rotate
      zones, and a centre click would land on the toolbar */
@@ -196,6 +207,7 @@ describe.skipIf(!findBrowserPath() || !CLIPBOARD_IS_RELIABLE)('canvas clipboard 
     await copyImage()
     await page.evaluate(() => window.canvasClipboardHarness.pick('#card'))
     await chord('c')
+    await waitForCopyToken()
     await chord('v')
     await expect.poll(() => count('section')).toBe(2)
     const doc = (await (await page.$('iframe[data-doop-frame]'))!.contentFrame())!
@@ -209,6 +221,7 @@ describe.skipIf(!findBrowserPath() || !CLIPBOARD_IS_RELIABLE)('canvas clipboard 
   it('pastes a newer external image instead of stale copied elements', async () => {
     await page.evaluate(() => window.canvasClipboardHarness.pick('#card'))
     await chord('c')
+    await waitForCopyToken()
     await copyImage()
     await chord('v')
     await expect.poll(() => uploads).toBe(1)
@@ -218,8 +231,16 @@ describe.skipIf(!findBrowserPath() || !CLIPBOARD_IS_RELIABLE)('canvas clipboard 
   it('does not paste an old element when external text replaced the clipboard', async () => {
     await page.evaluate(() => window.canvasClipboardHarness.pick('#card'))
     await chord('c')
-    await writeClipboardText('new external text')
-    await chord('v')
+    await waitForCopyToken()
+    /* The system clipboard cannot be replaced and observed atomically in
+       headless Chromium: `writeText` plus a real Ctrl+V still delivered the
+       copy's token on CI (runs 42600915322, 42612259103). Drive the paste
+       decision with the external text the event would carry instead. */
+    await page.evaluate(() => {
+      const data = new DataTransfer()
+      data.setData('text/plain', 'new external text')
+      window.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }))
+    })
     await page.evaluate(
       () => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))),
     )
