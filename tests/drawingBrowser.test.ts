@@ -35,12 +35,12 @@ declare global {
 }
 
 /* 98 tests, each reloading the whole fixture. The inner waits are the ones that
-   should fire first (30s navigation, 30s harness wait); the hook budget sits
-   above their sum so a slow runner reports *which* step overran instead of the
-   opaque "Hook timed out in 30000ms" that took this file down on CI (run 42595435659).
-   The CI job that runs this file alone is timeout-capped, so a genuinely
-   wedged page still fails the run quickly. */
-describe.skipIf(!findBrowserPath())('drawing on the canvas', { timeout: 30_000, hookTimeout: 90_000 }, () => {
+   should fire first (30s navigation, 30s harness wait); beforeEach gets a
+   budget above their sum so a slow runner reports *which* step overran instead
+   of the opaque "Hook timed out in 30000ms" that took this file down on CI
+   (run 42595435659). The CI job that runs this file alone is timeout-capped, so
+   a genuinely wedged page still fails the run quickly. */
+describe.skipIf(!findBrowserPath())('drawing on the canvas', { timeout: 30_000 }, () => {
   let browser: TestBrowser
   let page: Page
   let saved: Frame[] = []
@@ -60,7 +60,7 @@ describe.skipIf(!findBrowserPath())('drawing on the canvas', { timeout: 30_000, 
       return await run()
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error)
-      throw new Error(`beforeEach/${name} failed after ${Date.now() - started}ms: ${reason}`)
+      throw new Error(`beforeEach/${name} failed after ${Date.now() - started}ms: ${reason}`, { cause: error })
     }
   }
 
@@ -144,7 +144,7 @@ describe.skipIf(!findBrowserPath())('drawing on the canvas', { timeout: 30_000, 
     )
     await phase('wait for the tools', () => page.waitForSelector('[aria-label="Canvas tools"]'))
     await phase('set the camera', () => page.evaluate(() => window.drawingHarness.viewport({ x: 40, y: 20, zoom: 2 })))
-  })
+  }, 90_000)
 
   afterAll(async () => {
     await page?.close()
