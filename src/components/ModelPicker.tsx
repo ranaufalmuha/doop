@@ -3,7 +3,7 @@ import { posthog } from '../lib/posthog'
 import { navigate } from '../App'
 import { cn } from '@/lib/utils'
 import { BrandMark, type Brand } from './ui/brand-mark'
-import { EffortSlider } from './ConnectionTable'
+import { EffortSlider, NoVisionBadge } from './ConnectionTable'
 import { DoopMark } from './Logo'
 import { useAgentModels } from './ModelAccount'
 import { useAgentRunners, useRunnerPick } from '../lib/runnerPick'
@@ -126,6 +126,7 @@ export function ModelPicker({ disabled = false }: { disabled?: boolean }) {
           }
         >
           <span className="truncate">{label}</span>
+          {resolved?.runner.vision === false && <NoVisionBadge />}
           {effortLabel && <span className="flex-none text-ink-faint">{effortLabel}</span>}
         </MenuButton>
       </DropdownMenuTrigger>

@@ -144,3 +144,37 @@ it('says so with nothing connected, and carries no pick', async () => {
   expect(document.body.textContent).toContain('Nothing connected yet')
   expect(document.body.textContent).toContain('Connect a model…')
 })
+
+it('offers a custom provider by its label with its models, and flags a model without vision', async () => {
+  const withCustom: AgentRunners = {
+    runners: [
+      both.runners[1]!,
+      {
+        provider: 'custom',
+        name: '9Router',
+        model: '9router/auto',
+        vision: false,
+        models: [{ id: '9router/auto', name: '9router/auto', blurb: '' }],
+      },
+    ],
+    default: 'chatgpt',
+  }
+  mocks.runners.mockResolvedValue(withCustom)
+  mocks.models.mockImplementation(async (kind: string) =>
+    kind === 'custom'
+      ? { models: [{ id: '9router/auto', name: '9router/auto', blurb: '', vision: false }], live: true }
+      : { models: [], live: false },
+  )
+  await act(async () => root.render(<ModelPicker />))
+  await settle()
+  await open()
+  expect(document.body.textContent).toContain('9Router')
+  expect(radio('9router/auto')).toBeTruthy()
+  await pickItem('9router/auto')
+  await settle()
+  /* the picked provider's live catalog is what the next open asks for */
+  expect(mocks.models).toHaveBeenCalledWith('custom')
+  expect(currentRunnerPick()).toEqual({ provider: 'custom', model: '9router/auto' })
+  /* the composer promises no visual review for a text-only model */
+  expect(trigger().textContent).toContain('no visual review')
+})
