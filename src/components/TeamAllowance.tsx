@@ -41,6 +41,7 @@ function byoText(allowance: Allowance, t: Translate, provider: RunnerProvider | 
   const kind = provider ?? allowance.byoKind
   if (kind === 'gemini-cloud') return t('home.meterGeminiCloud')
   if (kind === 'claude-local') return t('home.meterClaudeLocal')
+  if (kind === 'custom') return t('home.meterCustom', { provider: allowance.byoLabel ?? ACCOUNT_KIND_LABELS.custom })
   if (kind === 'chatgpt' || !kind) return t('home.meterChatgpt')
   return t('home.meterProviderKey', { provider: ACCOUNT_KIND_LABELS[kind] })
 }

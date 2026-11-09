@@ -4,9 +4,25 @@ import { isDesktopShell } from '../lib/shell'
 import { Fragment, useCallback, useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { api } from '../lib/api'
-import type { AgentModelCatalog, AgentModelOption, DeviceFlow, ModelAccountKind, ModelAccounts } from '../lib/api'
+import type {
+  AgentModelCatalog,
+  AgentModelOption,
+  CustomProviderInput,
+  CustomProviderPatch,
+  DeviceFlow,
+  ModelAccountKind,
+  ModelAccounts,
+} from '../lib/api'
 import type { RunnerProvider } from '../../shared/agentRunner'
-import { AvailableRow, ConnectionRow, FieldError, ConnectionSection, ModelSelect } from './ConnectionTable'
+import {
+  AvailableRow,
+  ConnectionRow,
+  FieldError,
+  ConnectionSection,
+  ModelSelect,
+  type ModelChoice,
+} from './ConnectionTable'
+import { CustomProviderEntry } from './CustomProviderSettings'
 import { useLocalAgent } from '../lib/localAgent'
 import { posthog } from '../lib/posthog'
 import { useStore } from '../lib/store'
@@ -174,7 +190,9 @@ export function ModelAccountPanel({ onChange }: { onChange?: () => void }) {
   const desktop = isDesktopShell()
   const { view, refresh, set } = useModelAccounts()
   const localState = useLocalAgent()
-  const [showKey, setShowKey] = useState<false | Exclude<ModelAccountKind, 'chatgpt'>>(false)
+  const [showKey, setShowKey] = useState<false | 'openai-key' | 'anthropic-key' | 'openrouter-key' | 'gemini-key'>(
+    false,
+  )
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   /* the connection a failure belongs to, so it shows under that row or
@@ -250,16 +268,23 @@ export function ModelAccountPanel({ onChange }: { onChange?: () => void }) {
   }
 
   /* one request that answers with the whole view; a failure re-reads it and
-     shows under the connection it was about */
-  const act = async (at: ModelAccountKind | null, request: () => Promise<ModelAccounts>, done?: () => void) => {
+     shows under the connection it was about. Answers whether it landed, so a
+     form only closes on success. */
+  const act = async (
+    at: ModelAccountKind | null,
+    request: () => Promise<ModelAccounts>,
+    done?: () => void,
+  ): Promise<boolean> => {
     setBusy(true)
     setError('')
     try {
       settle(await request())
       done?.()
+      return true
     } catch (e) {
       fail(e, at)
       refresh()
+      return false
     } finally {
       setBusy(false)
     }
@@ -366,6 +391,31 @@ export function ModelAccountPanel({ onChange }: { onChange?: () => void }) {
       () => posthog.capture('agent_default_changed', { provider }),
     )
 
+  /* the custom OpenAI-compatible endpoint: connect/replace, one-field PATCH
+     and disconnect all answer with the whole Settings view */
+  const connectCustom = (input: CustomProviderInput) =>
+    act(
+      'custom',
+      () => api.connectCustomProvider(input),
+      () => posthog.capture('custom_provider_connected'),
+    )
+  const patchCustom = (patch: CustomProviderPatch) =>
+    act(
+      'custom',
+      () => api.updateCustomProvider(patch),
+      () => posthog.capture('custom_provider_changed', { field: Object.keys(patch)[0] }),
+    )
+  const disconnectCustom = () =>
+    act(
+      'custom',
+      () => api.disconnectCustomProvider(),
+      () => posthog.capture('custom_provider_disconnected'),
+    )
+  const clearCustomError = () => {
+    setError('')
+    setErrorAt(null)
+  }
+
   if (!view) return null
 
   /* the failure that belongs to this connection, if any */
@@ -450,7 +500,7 @@ export function ModelAccountPanel({ onChange }: { onChange?: () => void }) {
   )
 
   const keyRow = (cfg: {
-    kind: Exclude<ModelAccountKind, 'chatgpt'>
+    kind: Exclude<ModelAccountKind, 'chatgpt' | 'custom'>
     title: string
     /** the card's one line, before it is connected */
     short: string
@@ -649,6 +699,19 @@ export function ModelAccountPanel({ onChange }: { onChange?: () => void }) {
     onChange: refresh,
   }
 
+  /* the custom provider's dropdown: the live catalog (each entry stamped
+     with the account's vision flag), else just the stored id — never an
+     empty picker */
+  const customAccount = accountOf('custom')
+  const customMenu = (): ModelChoice[] => {
+    if (!customAccount) return []
+    const catalog = catalogs.custom
+    const vision = customAccount.vision === true
+    if (catalog?.live && catalog.models.length > 0) return catalog.models.map((model) => ({ ...model, vision }))
+    if (customAccount.model) return [{ id: customAccount.model, name: customAccount.model, blurb: '', vision }]
+    return []
+  }
+
   const entries: Entry[] = []
   if (view.chatgptEnabled !== false) {
     entries.push(
@@ -740,6 +803,29 @@ export function ModelAccountPanel({ onChange }: { onChange?: () => void }) {
       placeholder: 'sk-ant-…',
     }),
   )
+  /* the self-hosted OpenAI-compatible endpoint, hidden when the server's
+     CUSTOM_ENDPOINT_POLICY is off */
+  if (view.customEnabled !== false) {
+    entries.push({
+      connected: !!customAccount,
+      node: (
+        <CustomProviderEntry
+          key="custom"
+          view={view}
+          account={customAccount}
+          models={customMenu()}
+          catalogError={customAccount ? catalogs.custom?.error : undefined}
+          busy={busy}
+          error={errorFor('custom')}
+          onSubmit={connectCustom}
+          onPatch={patchCustom}
+          onMakeDefault={() => void makeDefault('custom')}
+          onDisconnect={disconnectCustom}
+          onClearError={clearCustomError}
+        />
+      ),
+    })
+  }
   const connected = entries.filter((entry) => entry.connected)
   const unconnected = entries.filter((entry) => !entry.connected)
 

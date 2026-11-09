@@ -236,6 +236,7 @@ export function ModelSelect({
   effort,
   onEffort,
   disabled,
+  caption,
 }: {
   /** the provider, for the trigger's label */
   name: string
@@ -246,6 +247,9 @@ export function ModelSelect({
   effort?: string
   onEffort?: (id: string) => void | Promise<unknown>
   disabled?: boolean
+  /** why the live list is missing, under the choices (a custom provider the
+   *  server could not reach: typing an id still works) */
+  caption?: string | undefined
 }) {
   const t = useT()
   const current = models.find((m) => m.id === model)
@@ -279,6 +283,11 @@ export function ModelSelect({
           {/* a pinned id or server override outside the menu still has to show */}
           {model && !current && <DropdownMenuRadioItem value={model}>{model}</DropdownMenuRadioItem>}
         </DropdownMenuRadioGroup>
+        {caption && (
+          <DropdownMenuCaption className="max-w-[280px] whitespace-normal pb-1 text-ink-faint">
+            {caption}
+          </DropdownMenuCaption>
+        )}
         {efforts && efforts.length > 0 && onEffort && (
           <>
             <DropdownMenuSeparator />
