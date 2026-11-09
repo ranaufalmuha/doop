@@ -81,6 +81,19 @@ hook timeout itself, the page stopped answering: note the test name from the
 failure block, the run/job ids, and open a CI stability issue with the log
 excerpt.
 
+A step name tells you what to look at:
+
+- `beforeEach/load the fixture` — navigation (`page.goto`) timed out; the
+  fixture server or the network is slow.
+- `beforeEach/wait for the harness` — the document loaded but its module
+  script did not run (Vite transform/module error, or a starved renderer).
+  Each test now gets a **fresh page** (`openDrawingPage`), so this is no longer
+  inheritable page state; check the fixture server and the browser. The failure
+  message appends the page's last failed responses (`[network: 500 …]`) when
+  there are any.
+- `beforeEach/open a fresh page` — Chromium could not create/close a target;
+  check for a crashed browser (`page crashed:` is logged into the failure).
+
 ## Re-running: recorded, never silent
 
 `--retry=0` is explicit in both jobs and the pipeline has no retry action.

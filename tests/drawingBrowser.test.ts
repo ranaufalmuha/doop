@@ -34,12 +34,13 @@ declare global {
   }
 }
 
-/* 98 tests, each reloading the whole fixture. The inner waits are the ones that
-   should fire first (30s navigation, 30s harness wait); beforeEach gets a
-   budget above their sum so a slow runner reports *which* step overran instead
-   of the opaque "Hook timed out in 30000ms" that took this file down on CI
-   (run 42595435659). The CI job that runs this file alone is timeout-capped, so
-   a genuinely wedged page still fails the run quickly. */
+/* 98 tests, each loading the whole fixture on a page of its own. The inner
+   waits are the ones that should fire first (30s navigation, 30s harness
+   wait); beforeEach gets a budget above their sum so a slow runner reports
+   *which* step overran instead of the opaque "Hook timed out in 30000ms" that
+   took this file down on CI (run 42595435659). The CI job that runs this file
+   alone is timeout-capped, so a genuinely wedged page still fails the run
+   quickly. */
 describe.skipIf(!findBrowserPath())('drawing on the canvas', { timeout: 30_000 }, () => {
   let browser: TestBrowser
   let page: Page
@@ -49,10 +50,14 @@ describe.skipIf(!findBrowserPath())('drawing on the canvas', { timeout: 30_000 }
   /* the anchors sent by PATCH /api/comments/:id/anchor, in order */
   let commentMoves: Record<string, unknown>[] = []
   const errors: string[] = []
+  /* responses that failed on the current page, newest last; only read when the
+     fixture's module script does not boot, so a 500 from the fixture server is
+     named in the failure instead of looking like a slow renderer */
+  let networkIssues: string[] = []
 
-  /* beforeEach reloads the whole fixture before all 98 tests. Naming the step
-     and its elapsed time turns a bare "Hook timed out" into the exact wait
-     that overran, which is the difference between a runbook a
+  /* beforeEach opens a page and loads the whole fixture before all 98 tests.
+     Naming the step and its elapsed time turns a bare "Hook timed out" into
+     the exact wait that overran, which is the difference between a runbook a
      stranger can follow and a guess. */
   async function phase<T>(name: string, run: () => Promise<T>): Promise<T> {
     const started = Date.now()
@@ -64,14 +69,23 @@ describe.skipIf(!findBrowserPath())('drawing on the canvas', { timeout: 30_000 }
     }
   }
 
-  beforeAll(async () => {
-    browser = await openBrowser()
-    page = await browser.newPage()
+  /* A page of its own for every test. Reusing one page across 98 whole-app
+     loads left the fixture occasionally loading without executing its module
+     script: `goto` returned, `window.drawingHarness` never appeared, and every
+     later hook timed out behind it (run 42609784027). A new target per test
+     makes that state impossible to inherit. */
+  async function openDrawingPage(): Promise<Page> {
+    networkIssues = []
+    const page = await browser.newPage()
     page.setDefaultTimeout(10_000)
     page.on('pageerror', (err) => errors.push(String(err)))
     /* a crashed renderer makes every later navigation hang: record the crash
        so the hook timeout that follows has a cause in the log */
     page.on('error', (err) => errors.push(`page crashed: ${err.message}`))
+    page.on('response', (res) => {
+      if (res.status() >= 400) networkIssues.push(`${res.status()} ${res.url()}`)
+    })
+    page.on('requestfailed', (req) => networkIssues.push(`failed ${req.url()} ${req.failure()?.errorText ?? ''}`))
     /* holds the frames' hit-test answers while a test sets heldMoveHits; it
        must listen before the app does, since a window's own listeners run in
        the order they were added */
@@ -112,9 +126,19 @@ describe.skipIf(!findBrowserPath())('drawing on the canvas', { timeout: 30_000 }
         await req.respond({ status: 200, contentType: 'application/json', body: '{}' })
       } else await req.continue()
     })
+    return page
+  }
+
+  beforeAll(async () => {
+    browser = await openBrowser()
+    page = await openDrawingPage()
   }, 60_000)
 
   beforeEach(async () => {
+    await phase('open a fresh page', async () => {
+      await page.close()
+      page = await openDrawingPage()
+    })
     await phase('reset input', async () => {
       await page.mouse.reset()
       await page.keyboard.up('Shift')
@@ -126,7 +150,15 @@ describe.skipIf(!findBrowserPath())('drawing on the canvas', { timeout: 30_000 }
     await phase('set viewport', () => page.setViewport({ width: 1200, height: 800 }))
     await phase('load the fixture', () => page.goto(fixtureUrl('drawing.html')))
     /* a cold fixture load on a slow CI runner can pass the default 10s wait */
-    await phase('wait for the harness', () => page.waitForFunction(() => !!window.drawingHarness, { timeout: 30_000 }))
+    await phase('wait for the harness', async () => {
+      try {
+        await page.waitForFunction(() => !!window.drawingHarness, { timeout: 30_000 })
+      } catch (error) {
+        const recent = networkIssues.slice(-5).join('; ')
+        const reason = error instanceof Error ? error.message : String(error)
+        throw new Error(recent ? `${reason} [network: ${recent}]` : reason)
+      }
+    })
     await phase('seed the canvas', () =>
       page.evaluate(() =>
         window.drawingHarness.seed({
