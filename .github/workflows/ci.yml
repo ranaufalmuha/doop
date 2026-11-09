@@ -81,9 +81,12 @@ jobs:
       - run: bun install --frozen-lockfile
       # `bun run test`, not `bun test`: the suite is vitest, and `bun test`
       # would run Bun's own runner against the same files.
+      # The exclude is a root-relative glob, not a bare path: vitest matches it
+      # against the absolute specifier, so a bare tests/... silently matched
+      # nothing and drew the file in every shard as well.
       # --retry=0 keeps a failure a failure: a rerun is a deliberate, recorded
       # act (docs/ci-test-runbook.md), never something the pipeline does for us.
-      - run: bun run test -- --shard=${{ matrix.shard }}/${{ strategy.job-total }} --exclude tests/drawingBrowser.test.ts --retry=0
+      - run: bun run test -- --shard=${{ matrix.shard }}/${{ strategy.job-total }} --exclude '**/tests/drawingBrowser.test.ts' --retry=0
 
   # The heaviest browser file, alone on its runner. It reads a real Chromium
   # and the whole Stage fixture 98 times; on a starved runner a single fixture
