@@ -109,13 +109,15 @@ Input is the API root from the provider's docs. The form accepts either the orig
 | `https://api.9router.dev/v1`                     | `https://api.9router.dev` |
 | `https://api.9router.dev/v1/`                    | `https://api.9router.dev` |
 | `http://127.0.0.1:20128/v1` (private)            | `http://127.0.0.1:20128`  |
+| `http://localhost:20128/v1` (private)            | `http://localhost:20128`  |
 | `http://10.0.0.5:4000/v1` (private)              | `http://10.0.0.5:4000`    |
 | `https://router.example.com/api`                 | rejected                  |
 | `https://router.example.com/v1/chat/completions` | rejected                  |
 
 9Router has two products and the UI says so: the **local gateway** is
-`http://127.0.0.1:20128/v1` (self-host, `private`; the README prefers `127.0.0.1` over
-`localhost` because of IPv6), the **hosted service** is `https://api.9router.dev/v1` (`public`).
+`http://localhost:20128/v1` (self-host, `private`; the README prefers `127.0.0.1` because of
+IPv6 — both are accepted and `localhost` is stored verbatim, classified as private), the
+**hosted service** is `https://api.9router.dev/v1` (`public`).
 They have different catalogues and model ids. On Doop Cloud the server cannot reach a user's
 laptop: the form says a public URL or a tunnel is required.
 
@@ -136,9 +138,10 @@ headers in v1 (follow-up).
 2. Validate `label`, screen `baseUrl` (syntax + DNS/IP + resolve-and-pin), validate `apiKey` if
    present. Nothing is fetched before all three pass.
 3. **Catalog (advisory)**: `GET {origin}/v1/models` with a 5 s budget and 2 MiB cap. A usable
-   `{data:[{id,...}]}` becomes the suggestion list. Any failure (401, 404, 5xx, timeout, bad
-   shape) is recorded as "no catalog" and **does not block saving** — `/models` is a suggestion
-   list, not a capability contract.
+   `{data:[{id,...}]}` becomes the suggestion list. Any failure (401, 404, 5xx, timeout at the
+   budget, over-cap, bad shape) is recorded as "no catalog", the catalog step is abandoned, and
+   connect **continues to the probe** — `/models` is a suggestion list, not a capability contract,
+   so it never decides the connect result. Only the probe does.
 4. Resolve the model: request `model` if valid, else the existing row's `model` (rotation), else
    the first catalog id, else `400 "Enter a model id — the provider did not list any."`.
 5. **Probe (the gate)**: one non-streaming `chat/completions` with `max_tokens: 32`, a single
@@ -159,9 +162,23 @@ A failed probe leaves an existing row untouched.
 
 `GET /api/model-account/models?kind=custom` calls `GET {origin}/v1/models` with a 5 s budget and a
 2 MiB cap. Accept `{data:[{id,name?,capabilities?,max_completion_tokens?}]}`; keep entries whose
-`id` passes the model-id rule and does not match the existing `NOT_AN_AGENT_MODEL` filter
-(embeddings/audio/image/etc.); de-duplicate; cap 1,000; keep provider order. Each entry gets
-`vision: <account.vision>` so the badge matches what will actually run.
+`id` passes the model-id rule and does not match the **custom non-chat filter**; de-duplicate;
+cap 1,000; keep provider order. Each entry gets `vision: <account.vision>` so the badge matches
+what will actually run.
+
+The custom non-chat filter drops only unambiguous non-chat modalities. Match, case-insensitively,
+the tokens `embedding|audio|tts|whisper|transcrib|realtime|moderation|image|robotics` as whole
+tokens inside the id's last path segment. Custom catalogs **do not reuse `NOT_AN_AGENT_MODEL`**
+(`server/modelCatalog.ts:49`): that regex also drops `instruct|chat|live|search`, which are
+legitimate parts of chat ids, so it would silently hide `llama3.1:8b-instruct-q4_K_M`,
+`qwen2.5:7b-instruct`, `meta.llama-4-instruct` and similar. `instruct`, `chat`, `live` and
+`search` are therefore not filtered. Like the rest of the catalog this list is advisory: a
+dropped or unknown id is still usable by typing it, and the probe remains the capability gate.
+
+`name` falls back to the `id` when the provider omits it (or sends a blank string); `blurb`
+falls back to `""` (no supported provider returns one in `/models`). The same rule fills the
+unavailable/manual fallback row and every `models` entry on `GET /api/agent-runners`, so `name`
+is never empty and `blurb` is always a string.
 
 `capabilities.vision` / `capabilities.tools` (9Router) and LiteLLM's `/model/info` are **hints**:
 they may prefill the form or annotate a suggestion, but never override the user's toggle and never
@@ -303,6 +320,16 @@ All routes are session-authenticated and owner-scoped. Every mutation answers wi
 Settings view, as the existing account routes do. Errors are always `{ "error": "<sentence>" }`.
 No custom route ever returns `api_key`.
 
+> **Route order.** Register `PATCH` and `DELETE /api/model-account/custom` **before** the existing
+> generic handlers `app.patch('/api/model-account/:kind')` (`server/index.ts:1015`) and
+> `app.delete('/api/model-account/:kind')` (`server/index.ts:1109`), or branch on
+> `kind === 'custom'` at the top of those handlers. Express matches in registration order: a
+> custom route registered later is unreachable, because the generic handler sees
+> `kind === 'custom'`, `isAccountKind('custom')` fails and it answers
+> `400 unknown account kind`. The same ordering applies to the `kind=custom` branch of
+> `GET /api/model-account/models` (`server/index.ts:992`), which must handle `custom` (including
+> the `off` case below) before the built-in account lookup.
+
 ### Shared view additions
 
 `AccountStatus` gains, for `kind='custom'` only:
@@ -367,8 +394,12 @@ effect on the next turn; changing `model` does not re-probe (the first turn surf
 
 ### `GET /api/model-account/models?kind=custom`
 
+- `CUSTOM_ENDPOINT_POLICY=off`: `404` for the `custom` kind. The route must branch on this before
+  the built-in `?kind` lookup, so `custom` never falls through to `400 unknown account kind`. Body:
+  `{error:"Custom provider connections are disabled on this server"}`.
 - Not connected: `{ "models": [], "live": false }`
-- Catalog reachable: `{ "models": [{ "id", "name", "blurb", "vision": false }], "live": true }`
+- Catalog reachable: `{ "models": [{ "id", "name", "blurb", "vision": false }], "live": true }`;
+  `name = entry.name?.trim() || entry.id`, `blurb = ""`.
 - Catalog unavailable: `{ "models": [{ "id": "<stored>", "name": "<stored>", "blurb": "",
 "vision": false }], "live": false, "error": "Could not load models from 9Router. Enter a model
 id instead." }`
@@ -480,17 +511,22 @@ label:"9Router", apiKey:"local", model:"9router/auto"}` then the response is 200
 - **AC6 — Redirects are never followed.** Given a provider answering `302 Location:
 http://169.254.169.254/latest`, when Alice connects, then POST is 400 ("redirected — use the
   final base URL"), the redirect target is not fetched, and no row is written.
-- **AC7 — The probe is the gate.** Given `/models` answers 401, then POST is 400 "Authentication
-  failed". Given `/models` answers 200 but the probe returns content with no `tool_calls`, then
-  POST is 400 naming the missing tool call and no row is written. Given `vision:true` and the
-  probe rejects the image, then POST is 400 telling the user to untick the box. A previous row is
-  unchanged in every failure case.
+- **AC7 — The probe is the gate.** Given `/models` answers 401 but the probe succeeds, then the
+  account is saved and `GET models` answers `live:false` — the catalog is advisory. Given the
+  probe answers 401 (or the key is rejected by both `/models` and the probe), then POST is 400
+  "Authentication failed" and no row is written. Given `/models` answers 200 but the probe returns
+  content with no `tool_calls`, then POST is 400 naming the missing tool call and no row is
+  written. Given `vision:true` and the probe rejects the image, then POST is 400 telling the user
+  to untick the box. A previous row is unchanged in every failure case.
 - **AC8 — Catalog is advisory; manual ids work.** Given `/models` answers 404 or times out, when
   the probe succeeds for `model:"my-model"`, then the account is saved and
   `GET /api/model-account/models?kind=custom` returns
   `{models:[{id:"my-model",...}], live:false, error:<string>}`. Given `/models` returns five
   agent-capable ids, then the same route returns `live:true` with all five and no error. Given a
-  live catalog without `my-model`, `PATCH {model:"my-model"}` is accepted and stored.
+  live catalog containing `llama3.1:8b-instruct-q4_K_M`, `qwen2.5:7b-instruct`,
+  `text-embedding-3-large` and `whisper-1`, then the first two are returned (the custom non-chat
+  filter keeps `instruct` ids) and the last two are dropped. Given a live catalog without
+  `my-model`, `PATCH {model:"my-model"}` is accepted and stored.
 - **AC9 — Ids are opaque.** Given `anthropic/claude-opus-4-6`, `9router/auto`, `premium-coding`,
   `moonshotai/kimi-k3`, `qwen3:32b`, `meta.llama-4`, `@cf/meta/llama-3.1-8b-instruct`, then each
   is stored and sent byte-for-byte (no prefix stripping, no split on `/`). Given `""`, `" "`, a
@@ -526,19 +562,22 @@ name:"9Router", model:<stored>, vision:false, models:[<stored>]}`; after switchi
   `ModelUnavailableError`; other 404 → endpoint/model message with the provider detail; 429 →
   rate-limit message honouring `Retry-After`; 5xx → provider-unavailable; a timeout → "could not
   reach"; `200 {error}` and non-JSON → their own messages; none contains the key.
-- **AC17 — Caps and timeouts.** Given `/models` streams more than 2 MiB, then the catalog is
-  abandoned at the cap and `GET models` answers `live:false` with an error rather than growing
-  memory. Given `/models` never answers, connect fails at 5 s to headers. Given a probe or a
+- **AC17 — Caps and timeouts.** Given `/models` streams more than 2 MiB, then the catalog read is
+  abandoned at the cap, `GET models` answers `live:false` with an error rather than growing
+  memory, and a connect continues to the probe. Given `/models` never answers, then the catalog
+  step is abandoned 5 s after the request is sent and connect continues to the probe — a probe
+  that succeeds saves the account, one that fails is the connect result. Given a probe or a
   completion runs past 120 s, it aborts and maps to a retryable error; the run's Stop cancels
   earlier. A completion over 8 MiB is abandoned at the cap.
 - **AC18 — Output budget.** Given no budget in the request, then the stored default is 8192 (or the
   model's `max_completion_tokens` hint clamped to 1024–16000). Given `PATCH {maxOutputTokens:4096}`,
   then 200 and the next turn sends `max_tokens:4096`. Given 0, 1023, 16001 or a non-integer, then
   400 and the row is unchanged.
-- **AC19 — Policy env.** Given `CUSTOM_ENDPOINT_POLICY=off`, then POST/PATCH/DELETE custom return
-  404, `AccountsView.customEnabled` is false and the UI row is hidden. Given `public`/`private`,
-  `customEnabled` is true and `policy` is echoed. The variable is in `.env.example` with its three
-  choices and `tests/env.test.ts` passes.
+- **AC19 — Policy env.** Given `CUSTOM_ENDPOINT_POLICY=off`, then POST/PATCH/DELETE custom and
+  `GET /api/model-account/models?kind=custom` return 404, `AccountsView.customEnabled` is false
+  and the UI row is hidden. Given `public`/`private`, `customEnabled` is true and `policy` is
+  echoed. The variable is in `.env.example` with its three choices and `tests/env.test.ts`
+  passes.
 - **AC20 — One-change PATCH and probe rate limit.** Given `{model, vision}` or `{}`, then PATCH is
   400 and the row is unchanged. Given 11 connect attempts in one minute, the 11th is 429 and no
   probe is sent.
@@ -565,8 +604,9 @@ name:"9Router", model:<stored>, vision:false, models:[<stored>]}`; after switchi
   paths, request body shape (`tools`, `max_tokens` from the account), vision on/off image
   handling, error mapping incl. body shapes (AC16), and that a redirect response is surfaced, not
   followed.
-- `tests/customProviderCatalog.test.ts` — parse/filter/cap, hints never authoritative, `live:false`
-  fallback (AC8), `vision` stamped from the account.
+- `tests/customProviderCatalog.test.ts` — parse/filter/cap, custom non-chat filter keeps
+  `instruct` ids and drops embeddings/audio, hints never authoritative, `live:false` fallback
+  (AC8), `vision` stamped from the account, `off` 404 branch (AC19).
 - `tests/customProviderSettings.test.tsx` — form fields, probe/error copy under the right field,
   replace, keyless, disconnect, off state, default badge (AC1/AC7/AC10/AC14).
 - extend `tests/modelPickerRunners.test.tsx` — custom label/models/no-vision in the composer
