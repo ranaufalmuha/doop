@@ -3,6 +3,8 @@ import { randomUUID } from 'node:crypto'
 import type Anthropic from '@anthropic-ai/sdk'
 import {
   IMAGE_NOTE,
+  ModelAuthError,
+  ModelConfigurationError,
   ModelUnavailableError,
   flattenToolResult,
   imagePart,
@@ -10,6 +12,17 @@ import {
   responseError,
 } from './openaiAgent.ts'
 import type { StopReason, TurnBlock, TurnRequest, TurnResult } from './openaiAgent.ts'
+import {
+  COMPLETION_MAX_BYTES,
+  CUSTOM_CHAT_PATH,
+  TURN_HEADERS_TIMEOUT_MS,
+  TURN_TOTAL_TIMEOUT_MS,
+  customBodyError,
+  customFetch,
+  customHttpMessage,
+  customProviderDetail,
+  retryAfterSeconds,
+} from './customEndpoint.ts'
 
 /**
  * Runs one Doop Agent turn against an OpenAI-compatible Chat Completions
@@ -21,8 +34,12 @@ import type { StopReason, TurnBlock, TurnRequest, TurnResult } from './openaiAge
  *    OpenAI-compatibility endpoint.
  *
  * Both URLs are fixed constants. Like the Azure transport, this module never
- * takes a user-supplied endpoint: a configurable base URL would be a
- * server-side fetch target, i.e. an SSRF into whatever network Doop runs on.
+ * takes a user-supplied endpoint by default: a configurable base URL would be
+ * a server-side fetch target, i.e. an SSRF into whatever network Doop runs on.
+ * The one deliberate exception is the screened custom provider, whose
+ * `guarded` config sends every request through `server/customEndpoint.ts`:
+ * resolve-and-pin, no redirects, byte caps and a hard timeout. A bare
+ * `url` with no `guarded` flag remains a fixed, trusted endpoint.
  *
  * Chat Completions shares the Responses API's one real impedance mismatch:
  * `role: 'tool'` messages are text-only, so images inside tool results are
@@ -42,7 +59,7 @@ export const IMAGE_OMITTED_NOTE = '[image omitted — the selected model cannot 
 const APP_ORIGIN = env.BETTER_AUTH_URL
 
 export interface ChatCompletionsConfig {
-  /** one of the fixed URL constants above — never user input */
+  /** a fixed URL constant, or the custom provider's literal chat path */
   url: string
   headers: Record<string, string>
   model: string
@@ -50,6 +67,12 @@ export interface ChatCompletionsConfig {
   label: string
   /** false = strip every image into a text note before sending */
   vision: boolean
+  /** custom only: the stored origin, for the guarded request helper */
+  origin?: string
+  /** custom only: the account's output budget; the other kinds keep req.maxTokens */
+  maxTokens?: number
+  /** custom only: send through the SSRF-guarded fetch instead of global fetch */
+  guarded?: boolean
 }
 
 export function openrouterConfig(apiKey: string, model: string, vision: boolean): ChatCompletionsConfig {
@@ -236,17 +259,85 @@ function fromCompletion(body: CompletionBody, label: string): TurnResult {
 /* transport                                                        */
 /* ---------------------------------------------------------------- */
 
+/** Turn-time mapping for the custom provider, keeping the agent's existing
+ *  error classes: 401 is a dead credential, a model-shaped 404 is a model
+ *  problem, and DNS/TLS/timeout are configuration errors. */
+function customTurnError(result: { status: number; retryAfter: string | null; text: string }, label: string): Error {
+  if (result.status >= 300 && result.status < 400) {
+    return new Error('Endpoint redirected — use the final base URL.')
+  }
+  const detail = customProviderDetail(result.text)
+  if (result.status === 401) return new ModelAuthError(`${label} rejected the API key — replace it in Settings.`)
+  if (result.status === 403) return new Error('Key is valid but this model or endpoint is not allowed.')
+  if (result.status === 429) {
+    const seconds = retryAfterSeconds(result.retryAfter)
+    return new Error(seconds === null ? 'Rate limited — retry in a moment.' : `Rate limited — retry in ${seconds}s.`)
+  }
+  if (result.status === 404) {
+    return isModelUnavailable(detail)
+      ? new ModelUnavailableError(`${label} cannot run this model.${detail ? ` ${detail}` : ''}`)
+      : new Error(`Endpoint or model not found — check the base URL and the model id.${detail ? ` ${detail}` : ''}`)
+  }
+  if (result.status >= 500) return new Error('Provider unavailable.')
+  return new Error(customHttpMessage(result, label))
+}
+
+function customTransportError(error: unknown): Error {
+  const message = error instanceof Error ? error.message : ''
+  if (/timed out|timeout/i.test(message)) {
+    return new ModelConfigurationError('Could not reach the endpoint — the request timed out.')
+  }
+  if (/certificate|CERT_|self.signed|ssl|tls/i.test(message)) {
+    return new ModelConfigurationError('Could not reach the endpoint — the certificate was rejected.')
+  }
+  return new ModelConfigurationError('Could not reach the endpoint — check the base URL.')
+}
+
 export async function runChatCompletionsTurn(config: ChatCompletionsConfig, req: TurnRequest): Promise<TurnResult> {
+  const body = JSON.stringify({
+    model: config.model,
+    messages: toMessages(req.system, req.messages, config.vision),
+    tools: toTools(req.tools),
+    tool_choice: 'auto',
+    max_tokens: config.maxTokens ?? req.maxTokens,
+  })
+  if (config.guarded) {
+    if (!config.origin) throw new ModelConfigurationError('Reconnect the custom provider in Settings.')
+    let result
+    try {
+      result = await customFetch({
+        origin: config.origin,
+        path: CUSTOM_CHAT_PATH,
+        method: 'POST',
+        headers: { ...config.headers, 'Content-Type': 'application/json' },
+        body,
+        signal: req.signal,
+        timeoutMs: TURN_TOTAL_TIMEOUT_MS,
+        headersTimeoutMs: TURN_HEADERS_TIMEOUT_MS,
+        maxBytes: COMPLETION_MAX_BYTES,
+      })
+    } catch (error) {
+      throw customTransportError(error)
+    }
+    if (!result.ok) throw customTurnError(result, config.label)
+    const bodyError = customBodyError(result.text)
+    if (bodyError) {
+      throw isModelUnavailable(bodyError)
+        ? new ModelUnavailableError(`${config.label}: ${bodyError}`)
+        : new Error(`${config.label}: ${bodyError}`)
+    }
+    let parsed: CompletionBody
+    try {
+      parsed = JSON.parse(result.text) as CompletionBody
+    } catch {
+      throw new Error('Endpoint returned non-JSON — check the base URL.')
+    }
+    return fromCompletion(parsed, config.label)
+  }
   const res = await fetch(config.url, {
     method: 'POST',
     headers: { ...config.headers, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: config.model,
-      messages: toMessages(req.system, req.messages, config.vision),
-      tools: toTools(req.tools),
-      tool_choice: 'auto',
-      max_tokens: req.maxTokens,
-    }),
+    body,
     signal: req.signal,
   })
   if (!res.ok) throw await responseError(res, config.label)

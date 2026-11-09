@@ -182,6 +182,10 @@ const schema = {
   GEMINI_OPENAI_CHAT_URL: str({
     default: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
   }),
+  /* the server-level policy for user-supplied OpenAI-compatible endpoints:
+     off = feature hidden; public = https and global addresses only (Doop
+     Cloud); private = self-host, also admits http and private networks. */
+  CUSTOM_ENDPOINT_POLICY: str({ choices: ['off', 'public', 'private'], default: 'public' }),
 
   /* ------------------------------------------------ image generation */
   OPENAI_API_KEY: str({ default: undefined }),

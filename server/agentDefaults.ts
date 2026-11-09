@@ -11,6 +11,7 @@ import { db } from './db/index.ts'
 import { agentDefaults } from './db/schema.ts'
 import { getAccounts, type ModelAccount } from './modelAccounts.ts'
 import { getLocalAgentPreference } from './localAgentPreferences.ts'
+import { customEndpointsEnabled } from './customEndpoint.ts'
 import { isRunnerProvider, type RunnerProvider } from '../shared/agentRunner.ts'
 import type { LocalAgentPreference } from '../shared/localAgent.ts'
 
@@ -48,7 +49,7 @@ export interface Connections {
 }
 
 export async function readConnections(userId: string): Promise<Connections> {
-  const [plan, accounts, stored] = await Promise.all([
+  const [plan, allAccounts, stored] = await Promise.all([
     getLocalAgentPreference(userId),
     getAccounts(userId),
     /* an unreadable mark is no mark: the fallback order still runs the work */
@@ -57,6 +58,10 @@ export async function readConnections(userId: string): Promise<Connections> {
       return undefined
     }),
   ])
+  /* an operator who sets the endpoint policy to `off` disables the feature
+     entirely: an existing custom row becomes invisible and unbillable, never a
+     route around the policy */
+  const accounts = customEndpointsEnabled() ? allAccounts : allAccounts.filter((account) => account.kind !== 'custom')
   return { plan, accounts, default: resolveDefault(stored, plan.enabled, accounts) }
 }
 

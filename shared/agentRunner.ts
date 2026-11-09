@@ -73,6 +73,8 @@ export interface AgentRunner {
   online?: boolean
   /** what the connection runs on when a pick names no model */
   model: string
+  /** false = runs skip visual review; absent means the provider has vision */
+  vision?: boolean
   effort?: string
   models: RunnerOption[]
   /** the effort dial, where the provider has one */
