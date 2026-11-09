@@ -73,6 +73,9 @@ export interface ChatCompletionsConfig {
   maxTokens?: number
   /** custom only: send through the SSRF-guarded fetch instead of global fetch */
   guarded?: boolean
+  /** custom only: the account key, so turn-time provider detail is scrubbed
+   *  before it reaches an error surface */
+  scrubKey?: string
 }
 
 export function openrouterConfig(apiKey: string, model: string, vision: boolean): ChatCompletionsConfig {
@@ -262,11 +265,15 @@ function fromCompletion(body: CompletionBody, label: string): TurnResult {
 /** Turn-time mapping for the custom provider, keeping the agent's existing
  *  error classes: 401 is a dead credential, a model-shaped 404 is a model
  *  problem, and DNS/TLS/timeout are configuration errors. */
-function customTurnError(result: { status: number; retryAfter: string | null; text: string }, label: string): Error {
+function customTurnError(
+  result: { status: number; retryAfter: string | null; text: string },
+  label: string,
+  apiKey?: string,
+): Error {
   if (result.status >= 300 && result.status < 400) {
     return new Error('Endpoint redirected — use the final base URL.')
   }
-  const detail = customProviderDetail(result.text)
+  const detail = customProviderDetail(result.text, apiKey)
   if (result.status === 401) return new ModelAuthError(`${label} rejected the API key — replace it in Settings.`)
   if (result.status === 403) return new Error('Key is valid but this model or endpoint is not allowed.')
   if (result.status === 429) {
@@ -279,7 +286,7 @@ function customTurnError(result: { status: number; retryAfter: string | null; te
       : new Error(`Endpoint or model not found — check the base URL and the model id.${detail ? ` ${detail}` : ''}`)
   }
   if (result.status >= 500) return new Error('Provider unavailable.')
-  return new Error(customHttpMessage(result, label))
+  return new Error(customHttpMessage(result, label, apiKey))
 }
 
 function customTransportError(error: unknown): Error {
@@ -319,8 +326,8 @@ export async function runChatCompletionsTurn(config: ChatCompletionsConfig, req:
     } catch (error) {
       throw customTransportError(error)
     }
-    if (!result.ok) throw customTurnError(result, config.label)
-    const bodyError = customBodyError(result.text)
+    if (!result.ok) throw customTurnError(result, config.label, config.scrubKey)
+    const bodyError = customBodyError(result.text, config.scrubKey)
     if (bodyError) {
       throw isModelUnavailable(bodyError)
         ? new ModelUnavailableError(`${config.label}: ${bodyError}`)

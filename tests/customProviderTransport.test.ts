@@ -173,6 +173,15 @@ describe('the guarded custom request', () => {
 })
 
 describe('turn-time error mapping', () => {
+  async function turnErrorMessage(): Promise<string> {
+    try {
+      await runChatCompletionsTurn(customChatConfig(account()), request)
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error)
+    }
+    throw new Error('expected the turn to reject')
+  }
+
   it('maps 401 to a dead credential', async () => {
     reply = (_req, res) => {
       res.writeHead(401)
@@ -210,6 +219,28 @@ describe('turn-time error mapping', () => {
       res.end()
     }
     await expect(runChatCompletionsTurn(customChatConfig(account()), request)).rejects.toThrow(/Provider unavailable/)
+  })
+
+  it('scrubs the key from 400/422/404 provider detail and keeps the human sentence (AC11, AC16)', async () => {
+    for (const status of [400, 422, 404]) {
+      reply = (_req, res) => {
+        res.writeHead(status)
+        res.end('{"error":{"message":"Incorrect API key provided: sk-custom-secret"}}')
+      }
+      const message = await turnErrorMessage()
+      expect(message).toContain('Incorrect API key provided: [redacted]')
+      expect(message).not.toContain('sk-custom-secret')
+    }
+  })
+
+  it('scrubs the key from a 200 {error} body and keeps the human sentence (AC11, AC16)', async () => {
+    reply = (_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end('{"error":{"message":"Upstream rejected bearer sk-custom-secret"}}')
+    }
+    const message = await turnErrorMessage()
+    expect(message).toContain('Upstream rejected bearer [redacted]')
+    expect(message).not.toContain('sk-custom-secret')
   })
 
   it('treats a 200 with an error object as a failure and a non-JSON body as its own message', async () => {

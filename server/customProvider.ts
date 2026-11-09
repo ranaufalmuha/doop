@@ -272,7 +272,7 @@ async function probe(options: ProbeOptions): Promise<void> {
     }
     throw new Error(customHttpMessage(result, label, apiKey))
   }
-  const bodyError = customBodyError(result.text)
+  const bodyError = customBodyError(result.text, apiKey)
   if (bodyError) throw new Error(`${label}: ${bodyError}`)
   let body: { choices?: { message?: { tool_calls?: unknown[] } }[] }
   try {
@@ -482,6 +482,7 @@ export function customChatConfig(account: ModelAccount): ChatCompletionsConfig {
     vision: account.vision === true,
     maxTokens: account.maxOutputTokens ?? DEFAULT_OUTPUT_TOKENS,
     guarded: true,
+    scrubKey: account.apiKey ?? undefined,
   }
 }
 

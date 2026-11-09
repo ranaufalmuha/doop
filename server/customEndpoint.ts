@@ -489,14 +489,15 @@ export function customProviderDetail(text: string, apiKey?: string): string {
 }
 
 /** Whether a 2xx body is actually an error (OpenRouter-style). Returns the
- *  detail when so. */
-export function customBodyError(text: string): string | null {
+ *  detail when so. The caller passes the account key so the detail reaches no
+ *  error surface unscrubbed. */
+export function customBodyError(text: string, apiKey?: string): string | null {
   try {
     const body = JSON.parse(text) as { error?: unknown } | null
     if (!body || typeof body !== 'object') return null
     const error = body.error
     if (!error) return null
-    return customProviderDetail(text)
+    return customProviderDetail(text, apiKey)
   } catch {
     return null
   }
