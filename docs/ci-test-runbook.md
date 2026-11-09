@@ -6,22 +6,30 @@ What to do when a `test` job fails or hangs. The pipeline is
 
 ## How the tests are split
 
-| Check                   | Runs                                                                         | Normal wall clock  |
-| ----------------------- | ---------------------------------------------------------------------------- | ------------------ |
-| `test (1)` … `test (4)` | every test file **except** `tests/drawingBrowser.test.ts`, sharded four ways | ~2-3 min per shard |
-| `test-drawing`          | `tests/drawingBrowser.test.ts` alone, no file parallelism                    | ~2-4 min           |
-| `tests`                 | aggregator: green only when all five jobs above are green                    | seconds            |
+| Check                   | Runs                                                                                      | Normal wall clock  |
+| ----------------------- | ----------------------------------------------------------------------------------------- | ------------------ |
+| `test (1)` … `test (4)` | the `parallel` + `clipboard` projects (`--project parallel --project clipboard`), sharded | ~2-3 min per shard |
+| `test-drawing`          | the `drawing` project alone: `tests/drawingBrowser.test.ts`, no file parallelism          | ~2-4 min           |
+| `tests`                 | aggregator: green only when all five jobs above are green                                 | seconds            |
 
 `drawingBrowser` is 98 tests that each reload the whole Stage fixture, so it
-gets a runner to itself. It is intentionally absent from `test (N)`: sharing a
-2-vCPU runner with the other Chromium files is what produced the 11-minute
-job and the `Hook timed out in 30000ms` cascade in
+gets a runner to itself. The split lives in `vite.config.ts` as three projects
+(`parallel`, `clipboard`, `drawing`), not in a `--exclude` flag: an inline
+project's `exclude` overrides the CLI one, so an exclude flag silently leaves
+the file in every shard. The shard jobs select `parallel` + `clipboard`; the
+dedicated job selects `drawing`.
+
+Sharing a 2-vCPU runner with the other Chromium files is what produced the
+11-minute job and the `Hook timed out in 30000ms` cascade in
 [run 42595435659](https://github.com/ranaufalmuha/doop/actions/runs/42595435659) (see also PR history
 `fix(test): root out the flaky browser tests in CI (#394)` and
 `fix(canvas): root out the two browser tests that flake on CI (#433)`).
 
 Both kinds of test job have `timeout-minutes: 15`, so a wedged browser fails
 the run instead of sitting there until a newer push cancels it.
+
+If a `test (N)` log ever shows `tests/drawingBrowser.test.ts (98 tests)`, the
+project config regressed: the file must only appear in `test-drawing`.
 
 ## Symptom: the run sits in `test-drawing` with no new output
 

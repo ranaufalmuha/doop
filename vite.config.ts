@@ -17,6 +17,14 @@ const clipboardTests = [
   'tests/pageCanvasBrowser.test.ts',
 ]
 
+/* 98 tests that each reload the whole Stage fixture. On a shared 2-vCPU runner
+   one slow fixture load turns every later beforeEach into a hook timeout and
+   the shard hangs (run 42595435659), so it gets a project and a CI job of its
+   own. The isolation lives in this config, not in a `--exclude` flag: an
+   inline project's `exclude` wins over a CLI one, which silently left the file
+   in every shard. */
+const drawingTests = ['tests/drawingBrowser.test.ts']
+
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   test: {
@@ -26,9 +34,16 @@ export default defineConfig({
     setupFiles: ['tests/setup.ts'],
     globalSetup: ['tests/globalSetup.ts'],
     projects: [
-      { test: { name: 'parallel', exclude: clipboardTests } },
+      {
+        test: {
+          name: 'parallel',
+          exclude: [...clipboardTests, ...drawingTests],
+        },
+      },
       // Browser contexts share the system clipboard, so these files must run one at a time.
       { test: { name: 'clipboard', include: clipboardTests, fileParallelism: false } },
+      // Runs in its own CI job (`test-drawing`), never in a shard.
+      { test: { name: 'drawing', include: drawingTests, fileParallelism: false } },
     ],
     /* seven files drive a real Chromium; closing one under a full parallel
        run can outlast the 10s default. drawingBrowser raises its own budget in

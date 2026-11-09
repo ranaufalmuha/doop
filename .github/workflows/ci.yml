@@ -62,10 +62,11 @@ jobs:
 
   # The suite boots a real server per integration file, which is CPU-bound on
   # the 2-vCPU runner; sharding across runners is what brings the step down.
-  # `drawingBrowser` is excluded here because it is 98 tests that each reload
-  # the whole app fixture: sharing a 2-vCPU runner with the other browser files
-  # is what turned one slow load into a cascade of 30s hook timeouts and an
-  # 11-minute job (see run 42595435659). It has a job of its own below.
+  # drawingBrowser lives in its own `drawing` project (vite.config.ts) and is
+  # not selected here: it is 98 tests that each reload the whole Stage fixture,
+  # and sharing a 2-vCPU runner with the other browser files is what turned one
+  # slow load into a cascade of hook timeouts and an 11-minute job
+  # (run 42595435659). It has a job of its own below.
   test:
     runs-on: ubuntu-latest
     # A hung shard fails here instead of running until a superseding push
@@ -81,12 +82,9 @@ jobs:
       - run: bun install --frozen-lockfile
       # `bun run test`, not `bun test`: the suite is vitest, and `bun test`
       # would run Bun's own runner against the same files.
-      # The exclude is a root-relative glob, not a bare path: vitest matches it
-      # against the absolute specifier, so a bare tests/... silently matched
-      # nothing and drew the file in every shard as well.
       # --retry=0 keeps a failure a failure: a rerun is a deliberate, recorded
       # act (docs/ci-test-runbook.md), never something the pipeline does for us.
-      - run: bun run test -- --shard=${{ matrix.shard }}/${{ strategy.job-total }} --exclude '**/tests/drawingBrowser.test.ts' --retry=0
+      - run: bun run test -- --shard=${{ matrix.shard }}/${{ strategy.job-total }} --project parallel --project clipboard --retry=0
 
   # The heaviest browser file, alone on its runner. It reads a real Chromium
   # and the whole Stage fixture 98 times; on a starved runner a single fixture
@@ -99,7 +97,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
-      - run: bun run test -- tests/drawingBrowser.test.ts --retry=0 --no-file-parallelism
+      - run: bun run test -- --project drawing --retry=0
 
   # One status that stands for every test job, so a required check or a merge
   # queue names "tests" rather than each "test (N)"; renumbering the matrix
