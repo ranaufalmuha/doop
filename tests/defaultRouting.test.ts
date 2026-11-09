@@ -45,6 +45,17 @@ const claudeKey = {
   connectedAt: 2,
 }
 const gemini = { kind: 'gemini-key', userId: 'alice', apiKey: 'AIza', enabled: false, connectedAt: 3 }
+const custom = {
+  kind: 'custom',
+  userId: 'alice',
+  baseUrl: 'http://127.0.0.1:20128',
+  label: '9Router',
+  model: '9router/auto',
+  vision: false,
+  maxOutputTokens: 8192,
+  enabled: true,
+  connectedAt: 4,
+}
 
 describe('work without a pick', () => {
   it('runs on the marked default, past a Plan that is on', async () => {
@@ -85,5 +96,24 @@ describe('a card with a pick', () => {
     expect(model?.provider).toBe('chatgpt')
     /* the pick's model belonged to Gemini, so ChatGPT runs its own */
     expect(model?.label).toContain('gpt-5.6-terra')
+  })
+})
+
+describe('a connected custom provider', () => {
+  it('runs on it and reports the no-vision flag (AC15)', async () => {
+    mocks.preference.mockResolvedValue({ enabled: false, model: 'default' })
+    mocks.accounts.mockResolvedValue([custom])
+    mocks.stored.mockReturnValue([{ provider: 'custom' }])
+    const model = await pickModel('alice')
+    expect(model?.provider).toBe('custom')
+    expect(model?.vision).toBe(false)
+    expect(model?.label).toContain('9Router')
+  })
+
+  it('takes an opaque model from the card’s pick', async () => {
+    mocks.accounts.mockResolvedValue([custom])
+    const model = await pickModel('alice', { provider: 'custom', model: 'anthropic/claude-opus-4-6' })
+    expect(model?.provider).toBe('custom')
+    expect(model?.label).toContain('anthropic/claude-opus-4-6')
   })
 })
