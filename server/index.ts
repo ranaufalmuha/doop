@@ -82,7 +82,13 @@ import { imageModelAvailability, serverImageGenEnabled } from './imageGen.ts'
 import { setImagePref } from './imagePrefs.ts'
 import { accountsView, listRunners, MODEL_MENUS } from './agentRunners.ts'
 import { setStoredDefault } from './agentDefaults.ts'
-import { connectCustom, customCatalogFor, CustomRateLimitError, patchCustom } from './customProvider.ts'
+import {
+  clearCustomCatalogCache,
+  connectCustom,
+  customCatalogFor,
+  CustomRateLimitError,
+  patchCustom,
+} from './customProvider.ts'
 import { customEndpointsEnabled } from './customEndpoint.ts'
 import { isRunnerProvider } from '../shared/agentRunner.ts'
 import { modelCatalogFor } from './modelCatalog.ts'
@@ -1028,10 +1034,13 @@ app.patch('/api/model-account/custom', async (req, res) => {
   }
 })
 
+/* deleting is allowed even when the feature is `off`: the policy can flip after
+   a key was stored, and the owner must still be able to remove that row. */
 app.delete('/api/model-account/custom', async (req, res) => {
-  if (customDisabled(res)) return
-  await modelAccounts.disconnect(req.user!.id, 'custom')
-  res.json(await accountsView(req.user!.id))
+  const userId = req.user!.id
+  await modelAccounts.disconnect(userId, 'custom')
+  clearCustomCatalogCache(userId)
+  res.json(await accountsView(userId))
 })
 
 app.get('/api/model-account/models', async (req, res) => {

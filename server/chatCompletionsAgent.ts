@@ -15,6 +15,7 @@ import type { StopReason, TurnBlock, TurnRequest, TurnResult } from './openaiAge
 import {
   COMPLETION_MAX_BYTES,
   CUSTOM_CHAT_PATH,
+  CUSTOM_KEY_PLACEHOLDER,
   TURN_HEADERS_TIMEOUT_MS,
   TURN_TOTAL_TIMEOUT_MS,
   customBodyError,
@@ -36,10 +37,11 @@ import {
  * Both URLs are fixed constants. Like the Azure transport, this module never
  * takes a user-supplied endpoint by default: a configurable base URL would be
  * a server-side fetch target, i.e. an SSRF into whatever network Doop runs on.
- * The one deliberate exception is the screened custom provider, whose
- * `guarded` config sends every request through `server/customEndpoint.ts`:
- * resolve-and-pin, no redirects, byte caps and a hard timeout. A bare
- * `url` with no `guarded` flag remains a fixed, trusted endpoint.
+ * The one deliberate exception is the screened custom provider: its own
+ * config type carries an `origin` (never a `url`) and its key explicitly, so it
+ * has no address a plain `fetch` could use and every request goes through
+ * `server/customEndpoint.ts`: resolve-and-pin, no redirects, byte caps and a
+ * hard timeout. A fixed config carries a URL constant and nothing user-supplied.
  *
  * Chat Completions shares the Responses API's one real impedance mismatch:
  * `role: 'tool'` messages are text-only, so images inside tool results are
@@ -58,8 +60,11 @@ export const IMAGE_OMITTED_NOTE = '[image omitted — the selected model cannot 
 
 const APP_ORIGIN = env.BETTER_AUTH_URL
 
-export interface ChatCompletionsConfig {
-  /** a fixed URL constant, or the custom provider's literal chat path */
+/** A trusted provider at one of the URL constants above. Its address is never
+ *  user-supplied, so its `url` can go straight to the global `fetch`. */
+export interface FixedChatCompletionsConfig {
+  kind: 'fixed'
+  /** a fixed URL constant */
   url: string
   headers: Record<string, string>
   model: string
@@ -67,19 +72,34 @@ export interface ChatCompletionsConfig {
   label: string
   /** false = strip every image into a text note before sending */
   vision: boolean
-  /** custom only: the stored origin, for the guarded request helper */
-  origin?: string
-  /** custom only: the account's output budget; the other kinds keep req.maxTokens */
-  maxTokens?: number
-  /** custom only: send through the SSRF-guarded fetch instead of global fetch */
-  guarded?: boolean
-  /** custom only: the account key, so turn-time provider detail is scrubbed
-   *  before it reaches an error surface */
-  scrubKey?: string
 }
 
-export function openrouterConfig(apiKey: string, model: string, vision: boolean): ChatCompletionsConfig {
+/**
+ * The custom provider's config, structurally separate from a fixed one. It has
+ * no `url`: only the stored, screened `origin`, and the transport appends the
+ * one literal chat path. Its key travels as `apiKey`, used both for the
+ * Authorization header and to scrub provider detail — there is no optional
+ * `guarded` flag a future caller could omit, and no generic header bag to hold
+ * the raw key.
+ */
+export interface CustomChatCompletionsConfig {
+  kind: 'custom'
+  /** the screened, stored origin (`scheme://host[:port]`) */
+  origin: string
+  /** the account's key; `undefined` sends the keyless placeholder */
+  apiKey: string | undefined
+  model: string
+  label: string
+  vision: boolean
+  /** the account's output budget, not the request's */
+  maxTokens: number
+}
+
+export type ChatCompletionsConfig = FixedChatCompletionsConfig | CustomChatCompletionsConfig
+
+export function openrouterConfig(apiKey: string, model: string, vision: boolean): FixedChatCompletionsConfig {
   return {
+    kind: 'fixed',
     url: OPENROUTER_URL,
     /* the attribution headers are how OpenRouter credits the calling app */
     headers: { Authorization: `Bearer ${apiKey}`, 'HTTP-Referer': APP_ORIGIN, 'X-Title': 'Doop' },
@@ -89,8 +109,9 @@ export function openrouterConfig(apiKey: string, model: string, vision: boolean)
   }
 }
 
-export function geminiConfig(apiKey: string, model: string, vision: boolean): ChatCompletionsConfig {
+export function geminiConfig(apiKey: string, model: string, vision: boolean): FixedChatCompletionsConfig {
   return {
+    kind: 'fixed',
     url: GEMINI_OPENAI_URL,
     headers: { Authorization: `Bearer ${apiKey}` },
     model,
@@ -306,17 +327,20 @@ export async function runChatCompletionsTurn(config: ChatCompletionsConfig, req:
     messages: toMessages(req.system, req.messages, config.vision),
     tools: toTools(req.tools),
     tool_choice: 'auto',
-    max_tokens: config.maxTokens ?? req.maxTokens,
+    max_tokens: config.kind === 'custom' ? config.maxTokens : req.maxTokens,
   })
-  if (config.guarded) {
-    if (!config.origin) throw new ModelConfigurationError('Reconnect the custom provider in Settings.')
+  if (config.kind === 'custom') {
     let result
     try {
       result = await customFetch({
         origin: config.origin,
         path: CUSTOM_CHAT_PATH,
         method: 'POST',
-        headers: { ...config.headers, 'Content-Type': 'application/json' },
+        headers: {
+          Authorization: `Bearer ${config.apiKey || CUSTOM_KEY_PLACEHOLDER}`,
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+        },
         body,
         signal: req.signal,
         timeoutMs: TURN_TOTAL_TIMEOUT_MS,
@@ -326,8 +350,8 @@ export async function runChatCompletionsTurn(config: ChatCompletionsConfig, req:
     } catch (error) {
       throw customTransportError(error)
     }
-    if (!result.ok) throw customTurnError(result, config.label, config.scrubKey)
-    const bodyError = customBodyError(result.text, config.scrubKey)
+    if (!result.ok) throw customTurnError(result, config.label, config.apiKey)
+    const bodyError = customBodyError(result.text, config.apiKey)
     if (bodyError) {
       throw isModelUnavailable(bodyError)
         ? new ModelUnavailableError(`${config.label}: ${bodyError}`)

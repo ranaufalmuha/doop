@@ -245,6 +245,40 @@ export function hasCustomControlChars(value: string): boolean {
   return false
 }
 
+/** True when a URL hostname is the loopback interface (`localhost`, 127/8,
+ *  `::1`), where plaintext http never leaves the server. */
+export function isCustomLoopbackHost(hostname: string): boolean {
+  const bare = hostname.replace(/^\[|\]$/g, '').toLowerCase()
+  if (bare === 'localhost') return true
+  const address = ipv4FromMapped(bare) ?? bare
+  const family = net.isIP(address)
+  if (family === 4) return address.startsWith('127.')
+  if (family === 6) return address === '::1'
+  return false
+}
+
+/* one warning per origin and process, not one per connect attempt */
+const plaintextWarned = new Set<string>()
+
+/**
+ * `private` admits plaintext http for LAN gateways (9Router/LiteLLM). That is
+ * intended, but it means the provider key crosses the network unencrypted, so
+ * connect logs one warning naming the origin. Returns null for https, for
+ * loopback (never leaves the machine) and for an origin already warned about.
+ */
+export function plaintextCustomOriginWarning(origin: string): string | null {
+  let url: URL
+  try {
+    url = new URL(origin)
+  } catch {
+    return null
+  }
+  if (url.protocol !== 'http:' || isCustomLoopbackHost(url.hostname)) return null
+  if (plaintextWarned.has(origin)) return null
+  plaintextWarned.add(origin)
+  return `plaintext origin ${origin} — the provider key crosses the network unencrypted; use https:// when the gateway supports it`
+}
+
 /** Model ids are opaque: trimmed, 1–120 chars, no whitespace/control chars and
  *  no quote/backslash. Never split on `/` or infer anything from the name. */
 export function cleanCustomModelId(value: unknown): string | null {

@@ -88,15 +88,25 @@
   the stored origin (`base_url`), display `label`, `vision` and `max_output_tokens` (default 8192,
   1024–16000). The server-level `CUSTOM_ENDPOINT_POLICY` is `off` / `public` (https + global
   addresses, the Doop Cloud setting) / `private` (self-host: also `http` and loopback/RFC1918/ULA);
-  cloud metadata ranges are blocked under either policy. Every origin is screened at save time and
+  cloud metadata ranges are blocked under either policy. **`private` is a single-tenant-only
+  setting**: it admits loopback/RFC1918/ULA origins for every signed-in user and reflects up to 300
+  characters of connect-time provider error text, so on a multi-user instance it exposes the
+  server's own network to every user; keep `public` (or `off`) on a shared deployment. Plaintext
+  `http://` to a non-loopback host is allowed under `private` for LAN gateways, so the provider key
+  crosses the network unencrypted; connect logs a one-time warning naming that origin. Every origin
+  is screened at save time and
   on every request — scheme, no credentials/query/fragment, origin or `/v1` root only, DNS
   classification, then connect to the classified IP through a pinned dispatcher. Only the literal
   `/v1/models` and `/v1/chat/completions` paths are ever requested, redirects are never followed,
   bodies are byte-capped (2 MiB catalog, 8 MiB completion) and timeouts are hard. Connect writes
   nothing until one probe proves the endpoint, key, model id and a `doop_ping` tool call (and a
-  1×1 image when vision is claimed); `/v1/models` is only a suggestion list. Runs use
-  `ChatCompletionsConfig.guarded`, the account's `max_tokens` budget and its vision flag; the key
-  stays `sealedText` and is absent from every status/view body. Tests:
+  1×1 image when vision is claimed); `/v1/models` is only a suggestion list, and the picker caches it
+  per user for a minute so repeated opens do not hammer the provider. Runs take a structurally
+  separate `CustomChatCompletionsConfig` (`kind: 'custom'`) that carries only the screened `origin`,
+  never a `url`, plus the `apiKey` explicitly; the transport always sends it through the guarded
+  fetch, with the account's `max_tokens` budget and vision flag. The key stays `sealedText`, is
+  absent from every status/view body, and a stored row can still be deleted while the policy is
+  `off`. Tests:
   `customEndpoint.test.ts` (shape + classifier), `customProvider.test.ts` (connect/probe/policy/
   routing), `customProviderTransport.test.ts` (guarded request + error classes),
   `customProviderCatalog.test.ts` (advisory parse/filter/cap).

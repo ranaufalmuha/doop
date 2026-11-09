@@ -12,6 +12,7 @@ import { readConnections } from './agentDefaults.ts'
 import {
   accountModelFor,
   chatgptConnectEnabled,
+  getAccounts,
   statusOf,
   takesReasoningEffort,
   type AccountKind,
@@ -93,9 +94,13 @@ export interface AccountsView {
 }
 
 export async function accountsView(userId: string): Promise<AccountsView> {
-  const connections = await readConnections(userId)
+  /* the view is informational, so it lists every stored row even when the
+     policy is `off` — that is how the owner can still see and delete a custom
+     key. Routing (`readConnections`) keeps hiding it, so an off policy never
+     runs or bills it. */
+  const [connections, accounts] = await Promise.all([readConnections(userId), getAccounts(userId)])
   return {
-    accounts: connections.accounts.map(statusOf),
+    accounts: accounts.map(statusOf),
     ...(connections.default ? { default: connections.default } : {}),
     chatgptEnabled: chatgptConnectEnabled(),
     customEnabled: customEndpointsEnabled(),

@@ -115,6 +115,7 @@ describe('the private-policy server', () => {
   let carol: Client
   let dave: Client
   let eve: Client
+  let frank: Client
 
   beforeAll(async () => {
     server = await startServer({ CUSTOM_ENDPOINT_POLICY: 'private', ANTHROPIC_API_KEY: '', DATABASE_URL: '' })
@@ -123,6 +124,7 @@ describe('the private-policy server', () => {
     carol = await new Client(server).signUp('custom-carol@example.test', 'Carol')
     dave = await new Client(server).signUp('custom-dave@example.test', 'Dave')
     eve = await new Client(server).signUp('custom-eve@example.test', 'Eve')
+    frank = await new Client(server).signUp('custom-frank@example.test', 'Frank')
   }, 90_000)
 
   afterAll(() => server?.stop())
@@ -373,6 +375,34 @@ describe('the private-policy server', () => {
     expect((await bob.put('/api/agent-runners/default', { provider: 'custom' })).status).toBe(400)
   })
 
+  it('caches the custom catalog for a minute and clears it when the row changes (F6)', async () => {
+    resetStub()
+    const connected = await frank.post('/api/model-account/custom', {
+      baseUrl: stubOrigin,
+      label: 'Frank Router',
+      apiKey: 'sk-frank',
+      model: '9router/auto',
+    })
+    expect(connected.status).toBe(200)
+    /* connect asks once for the suggestion list */
+    const afterConnect = state.modelsCalls
+    expect(afterConnect).toBe(1)
+
+    const first = await (await frank.get('/api/model-account/models?kind=custom')).json()
+    expect(first).toMatchObject({ live: true })
+    expect(state.modelsCalls).toBe(afterConnect + 1)
+
+    /* a second open inside the minute is served from the cache */
+    const second = await (await frank.get('/api/model-account/models?kind=custom')).json()
+    expect(second).toEqual(first)
+    expect(state.modelsCalls).toBe(afterConnect + 1)
+
+    /* changing the connection invalidates the cached list */
+    expect((await frank.patch('/api/model-account/custom', { vision: true })).status).toBe(200)
+    await frank.get('/api/model-account/models?kind=custom')
+    expect(state.modelsCalls).toBe(afterConnect + 2)
+  })
+
   it('rate-limits connect attempts to ten per minute per user (AC20)', async () => {
     let lastStatus = 0
     for (let attempt = 1; attempt <= 10; attempt++) {
@@ -430,22 +460,44 @@ describe('the off policy', () => {
   let alice: Client
 
   beforeAll(async () => {
-    server = await startServer({ CUSTOM_ENDPOINT_POLICY: 'off', ANTHROPIC_API_KEY: '', DATABASE_URL: '' })
+    /* a stored row can only be created while the feature is on, then the same
+       database reboots with `off` as an operator would flip the policy */
+    server = await startServer({ CUSTOM_ENDPOINT_POLICY: 'private', ANTHROPIC_API_KEY: '', DATABASE_URL: '' })
     alice = await new Client(server).signUp('custom-off@example.test', 'Alice')
-  }, 90_000)
+    resetStub()
+    const connected = await alice.post('/api/model-account/custom', {
+      baseUrl: stubOrigin,
+      label: '9Router',
+      apiKey: 'sk-off-secret',
+      model: '9router/auto',
+    })
+    expect(connected.status).toBe(200)
+    server.stop({ keepData: true })
+    await server.stopped
+    server = await startServer(
+      { CUSTOM_ENDPOINT_POLICY: 'off', ANTHROPIC_API_KEY: '', DATABASE_URL: '' },
+      server.dataDir,
+    )
+  }, 120_000)
 
   afterAll(() => server?.stop())
 
-  it('hides the feature and answers 404 on every custom route (AC19)', async () => {
+  it('hides the feature and 404s writes, but still shows and deletes a stored row (AC19/F4)', async () => {
     const view = (await (await alice.get('/api/model-account')).json()) as View
     expect(view.customEnabled).toBe(false)
     expect(view.policy).toBe('off')
+    /* status keeps the row visible so its owner can see what they remove */
+    expect(customAccount(view)).toMatchObject({ kind: 'custom', label: '9Router' })
 
     expect(
       (await alice.post('/api/model-account/custom', { baseUrl: 'https://api.9router.dev', label: 'x' })).status,
     ).toBe(404)
     expect((await alice.patch('/api/model-account/custom', { vision: true })).status).toBe(404)
-    expect((await alice.delete('/api/model-account/custom')).status).toBe(404)
     expect((await alice.get('/api/model-account/models?kind=custom')).status).toBe(404)
+
+    const deleted = await alice.delete('/api/model-account/custom')
+    expect(deleted.status).toBe(200)
+    expect(customAccount((await deleted.json()) as View)).toBeUndefined()
+    expect(customAccount((await (await alice.get('/api/model-account')).json()) as View)).toBeUndefined()
   })
 })

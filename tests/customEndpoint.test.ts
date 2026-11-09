@@ -3,6 +3,7 @@ import {
   classifyCustomAddress,
   cleanCustomModelId,
   normalizeCustomBaseUrl,
+  plaintextCustomOriginWarning,
   resolveCustomEndpoint,
   screenCustomBaseUrl,
 } from '../server/customEndpoint.ts'
@@ -63,6 +64,25 @@ describe('normalizeCustomBaseUrl', () => {
 
   it('is disabled entirely when the policy is off', () => {
     expect(() => normalizeCustomBaseUrl('https://api.9router.dev', 'off')).toThrow(/disabled/)
+  })
+})
+
+describe('plaintextCustomOriginWarning', () => {
+  it('warns once for http to a non-loopback host, and never for loopback or https (F3)', () => {
+    const warning = plaintextCustomOriginWarning('http://192.168.1.10:4000')
+    expect(warning).toMatch(/http:\/\/192\.168\.1\.10:4000/)
+    expect(warning).toMatch(/unencrypted/)
+    /* one warning per origin and process */
+    expect(plaintextCustomOriginWarning('http://192.168.1.10:4000')).toBeNull()
+
+    for (const quiet of [
+      'http://127.0.0.1:4000',
+      'http://[::1]:4000',
+      'http://localhost:4000',
+      'https://192.168.1.10:4000',
+    ]) {
+      expect(plaintextCustomOriginWarning(quiet)).toBeNull()
+    }
   })
 })
 

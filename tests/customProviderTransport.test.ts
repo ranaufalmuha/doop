@@ -104,6 +104,22 @@ afterEach(() => {
 })
 
 describe('the guarded custom request', () => {
+  it('is structurally custom: an origin and an explicit key, never a url (F5)', () => {
+    const config = customChatConfig(account())
+    expect(config).toEqual({
+      kind: 'custom',
+      origin,
+      apiKey: 'sk-custom-secret',
+      model: '9router/auto',
+      label: '9Router',
+      vision: true,
+      maxTokens: 4_096,
+    })
+    expect('url' in config).toBe(false)
+    expect('guarded' in config).toBe(false)
+    expect('scrubKey' in config).toBe(false)
+  })
+
   it('posts to the literal chat path with the account key, model and budget', async () => {
     await runChatCompletionsTurn(customChatConfig(account()), request)
     expect(received).toHaveLength(1)

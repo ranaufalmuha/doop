@@ -3,7 +3,7 @@ import { db } from './db/index.ts'
 import { modelAccounts } from './db/schema.ts'
 import { accountModelFor, getAccount, type ModelAccount } from './modelAccounts.ts'
 import { ModelConfigurationError } from './openaiAgent.ts'
-import type { ChatCompletionsConfig } from './chatCompletionsAgent.ts'
+import type { CustomChatCompletionsConfig } from './chatCompletionsAgent.ts'
 import {
   CATALOG_MAX_BYTES,
   CATALOG_TIMEOUT_MS,
@@ -26,6 +26,7 @@ import {
   customOriginHost,
   customProviderDetail,
   hasCustomControlChars,
+  plaintextCustomOriginWarning,
   screenCustomBaseUrl,
   type CustomEndpointPolicy,
 } from './customEndpoint.ts'
@@ -184,8 +185,18 @@ async function fetchCatalog(
   }
 }
 
-/** The picker's catalog, with the spec's never-empty fallback. */
-export async function customCatalogFor(account: ModelAccount): Promise<CustomCatalog> {
+/** The catalog is advisory and a scripted client can open the picker in a
+ *  loop, so one outbound `/v1/models` request per user per minute is enough.
+ *  Connect and PATCH clear the entry; the TTL covers the rest. */
+const CATALOG_CACHE_TTL_MS = 60_000
+const catalogCache = new Map<string, { expiresAt: number; catalog: CustomCatalog }>()
+
+/** Forget one user's cached catalog after their row changes. */
+export function clearCustomCatalogCache(userId: string): void {
+  catalogCache.delete(userId)
+}
+
+async function loadCustomCatalog(account: ModelAccount): Promise<CustomCatalog> {
   const stored = accountModelFor(account)
   const v = account.vision === true
   const label = account.label || 'the provider'
@@ -202,6 +213,17 @@ export async function customCatalogFor(account: ModelAccount): Promise<CustomCat
     models: catalog.models.map((model) => ({ id: model.id, name: model.name, blurb: '', vision: v })),
     live: true,
   }
+}
+
+/** The picker's catalog, with the spec's never-empty fallback, cached briefly
+ *  so opening the picker repeatedly does not hammer the user's own provider. */
+export async function customCatalogFor(account: ModelAccount): Promise<CustomCatalog> {
+  const now = Date.now()
+  const cached = catalogCache.get(account.userId)
+  if (cached && cached.expiresAt > now) return cached.catalog
+  const catalog = await loadCustomCatalog(account)
+  catalogCache.set(account.userId, { expiresAt: now + CATALOG_CACHE_TTL_MS, catalog })
+  return catalog
 }
 
 interface ProbeOptions {
@@ -353,9 +375,10 @@ export function takeCustomConnectAttempt(userId: string, now = Date.now()): bool
   return true
 }
 
-/** test hook: forget every rate-limit window */
+/** test hook: forget every rate-limit window and cached catalog */
 export function resetCustomRateLimits(): void {
   attempts.clear()
+  catalogCache.clear()
 }
 
 /** Connect or rotate the one custom provider. Nothing is written until the
@@ -368,6 +391,7 @@ export async function connectCustom(userId: string, input: ConnectInput): Promis
   }
   const started = Date.now()
   let host = ''
+  let scheme = ''
   let outcome = 'rejected:400'
   try {
     const previous = await getAccount(userId, 'custom')
@@ -376,6 +400,11 @@ export async function connectCustom(userId: string, input: ConnectInput): Promis
     const rawBaseUrl = input.baseUrl === undefined ? previous?.baseUrl : input.baseUrl
     const origin = await screenCustomBaseUrl(rawBaseUrl, policy)
     host = customOriginHost(origin)
+    scheme = new URL(origin).protocol.replace(':', '')
+    /* plaintext http is allowed under `private` for LAN gateways; say once,
+       at connect time, that the key now crosses the network in clear text */
+    const warning = plaintextCustomOriginWarning(origin)
+    if (warning) console.warn(`[custom-model] user=${userId} ${warning}`)
 
     const label = validateLabel(input.label, previous?.label || customOriginHost(origin) || 'Custom provider')
 
@@ -406,6 +435,7 @@ export async function connectCustom(userId: string, input: ConnectInput): Promis
 
     await probe({ origin, apiKey: apiKey ?? undefined, model, vision, label })
     await saveCustomAccount({ userId, baseUrl: origin, label, apiKey, model, vision, maxOutputTokens })
+    clearCustomCatalogCache(userId)
     outcome = 'ok'
   } catch (error) {
     if (error instanceof CustomRateLimitError) throw error
@@ -415,7 +445,7 @@ export async function connectCustom(userId: string, input: ConnectInput): Promis
     throw error
   } finally {
     console.log(
-      `[custom-model] user=${userId} host=${host || 'unknown'} outcome=${outcome} duration=${Date.now() - started}ms`,
+      `[custom-model] user=${userId} scheme=${scheme || 'unknown'} host=${host || 'unknown'} outcome=${outcome} duration=${Date.now() - started}ms`,
     )
   }
 }
@@ -462,27 +492,25 @@ async function writeOnly(
     .where(and(eq(modelAccounts.userId, userId), eq(modelAccounts.kind, 'custom')))
     .returning({ userId: modelAccounts.userId })
   if (!written.length) throw new Error('the connected account changed — try again')
+  clearCustomCatalogCache(userId)
 }
 
-/** The transport config for one custom account: the stored origin, the two
- *  literal paths, the sealed key, the account's budget and vision flag. */
-export function customChatConfig(account: ModelAccount): ChatCompletionsConfig {
+/** The transport config for one custom account: the stored origin (never a
+ *  URL), the sealed key, the account's budget and vision flag. The custom
+ *  config type sends every request through the guarded transport, so a caller
+ *  cannot construct one that skips it. */
+export function customChatConfig(account: ModelAccount): CustomChatCompletionsConfig {
   if (!account.baseUrl) throw new ModelConfigurationError('Reconnect the custom provider in Settings.')
   const model = accountModelFor(account)
   if (!model) throw new ModelConfigurationError('Pick a model for the custom provider in Settings.')
   return {
-    url: `${account.baseUrl}${CUSTOM_CHAT_PATH}`,
+    kind: 'custom',
     origin: account.baseUrl,
-    headers: {
-      Authorization: `Bearer ${account.apiKey || CUSTOM_KEY_PLACEHOLDER}`,
-      Accept: 'application/json',
-    },
+    apiKey: account.apiKey ?? undefined,
     model,
     label: account.label || 'Custom provider',
     vision: account.vision === true,
     maxTokens: account.maxOutputTokens ?? DEFAULT_OUTPUT_TOKENS,
-    guarded: true,
-    scrubKey: account.apiKey ?? undefined,
   }
 }
 
