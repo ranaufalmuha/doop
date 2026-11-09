@@ -34,7 +34,13 @@ declare global {
   }
 }
 
-describe.skipIf(!findBrowserPath())('drawing on the canvas', { timeout: 30_000 }, () => {
+/* 98 tests, each reloading the whole fixture. The inner waits are the ones that
+   should fire first (30s navigation, 30s harness wait); the hook budget sits
+   above their sum so a slow runner reports *which* step overran instead of the
+   opaque "Hook timed out in 30000ms" that took this file down on CI (run 42595435659).
+   The CI job that runs this file alone is timeout-capped, so a genuinely
+   wedged page still fails the run quickly. */
+describe.skipIf(!findBrowserPath())('drawing on the canvas', { timeout: 30_000, hookTimeout: 90_000 }, () => {
   let browser: TestBrowser
   let page: Page
   let saved: Frame[] = []
@@ -44,11 +50,28 @@ describe.skipIf(!findBrowserPath())('drawing on the canvas', { timeout: 30_000 }
   let commentMoves: Record<string, unknown>[] = []
   const errors: string[] = []
 
+  /* beforeEach reloads the whole fixture before all 98 tests. Naming the step
+     and its elapsed time turns a bare "Hook timed out" into the exact wait
+     that overran, which is the difference between a runbook a
+     stranger can follow and a guess. */
+  async function phase<T>(name: string, run: () => Promise<T>): Promise<T> {
+    const started = Date.now()
+    try {
+      return await run()
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      throw new Error(`beforeEach/${name} failed after ${Date.now() - started}ms: ${reason}`)
+    }
+  }
+
   beforeAll(async () => {
     browser = await openBrowser()
     page = await browser.newPage()
     page.setDefaultTimeout(10_000)
     page.on('pageerror', (err) => errors.push(String(err)))
+    /* a crashed renderer makes every later navigation hang: record the crash
+       so the hook timeout that follows has a cause in the log */
+    page.on('error', (err) => errors.push(`page crashed: ${err.message}`))
     /* holds the frames' hit-test answers while a test sets heldMoveHits; it
        must listen before the app does, since a window's own listeners run in
        the order they were added */
@@ -92,31 +115,35 @@ describe.skipIf(!findBrowserPath())('drawing on the canvas', { timeout: 30_000 }
   }, 60_000)
 
   beforeEach(async () => {
-    await page.mouse.reset()
-    await page.keyboard.up('Shift')
+    await phase('reset input', async () => {
+      await page.mouse.reset()
+      await page.keyboard.up('Shift')
+    })
     saved = []
     nextId = 0
     patchRequests = 0
     commentMoves = []
-    await page.setViewport({ width: 1200, height: 800 })
-    await page.goto(fixtureUrl('drawing.html'))
+    await phase('set viewport', () => page.setViewport({ width: 1200, height: 800 }))
+    await phase('load the fixture', () => page.goto(fixtureUrl('drawing.html')))
     /* a cold fixture load on a slow CI runner can pass the default 10s wait */
-    await page.waitForFunction(() => !!window.drawingHarness, { timeout: 30_000 })
-    await page.evaluate(() =>
-      window.drawingHarness.seed({
-        id: 'c',
-        name: 'Draw',
-        frames: [],
-        pages: [
-          { id: 'first', name: 'Main' },
-          { id: 'second', name: 'Other' },
-        ],
-        createdAt: 0,
-        updatedAt: 0,
-      }),
+    await phase('wait for the harness', () => page.waitForFunction(() => !!window.drawingHarness, { timeout: 30_000 }))
+    await phase('seed the canvas', () =>
+      page.evaluate(() =>
+        window.drawingHarness.seed({
+          id: 'c',
+          name: 'Draw',
+          frames: [],
+          pages: [
+            { id: 'first', name: 'Main' },
+            { id: 'second', name: 'Other' },
+          ],
+          createdAt: 0,
+          updatedAt: 0,
+        }),
+      ),
     )
-    await page.waitForSelector('[aria-label="Canvas tools"]')
-    await page.evaluate(() => window.drawingHarness.viewport({ x: 40, y: 20, zoom: 2 }))
+    await phase('wait for the tools', () => page.waitForSelector('[aria-label="Canvas tools"]'))
+    await phase('set the camera', () => page.evaluate(() => window.drawingHarness.viewport({ x: 40, y: 20, zoom: 2 })))
   })
 
   afterAll(async () => {

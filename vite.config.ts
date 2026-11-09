@@ -31,7 +31,8 @@ export default defineConfig({
       { test: { name: 'clipboard', include: clipboardTests, fileParallelism: false } },
     ],
     /* seven files drive a real Chromium; closing one under a full parallel
-       run can outlast the 10s default */
+       run can outlast the 10s default. drawingBrowser raises its own budget in
+       the file: it reloads the whole fixture 98 times. */
     hookTimeout: 30_000,
   },
   /* Error tracking resolves minified stack frames through the .map next to

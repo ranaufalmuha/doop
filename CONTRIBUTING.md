@@ -30,4 +30,6 @@ Common types: `feat`, `fix`, `chore`, `refactor`, `style`, `docs`, `test`, `ci`,
 
 A pre-commit hook (husky + lint-staged) runs ESLint and Prettier on staged files, and a commit-msg hook validates the message. Hooks install automatically via `bun install` (the `prepare` script).
 
-CI runs typecheck, lint, format check, build and the test suite (in four shards) as parallel jobs on every push and PR.
+CI runs typecheck, lint, format check, build and the test suite (in four shards, with
+`tests/drawingBrowser.test.ts` in a job of its own) as parallel jobs on every push and PR. When a
+test job goes red or hangs, follow [docs/ci-test-runbook.md](docs/ci-test-runbook.md).
