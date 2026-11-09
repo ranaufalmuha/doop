@@ -643,6 +643,14 @@ export const modelAccounts = pgTable(
     model: text('model'),
     /** OpenAI reasoning effort this user picked; null = the server default */
     reasoningEffort: text('reasoning_effort'),
+    /** custom: the stored origin (`scheme://host[:port]`), never a path */
+    baseUrl: text('base_url'),
+    /** custom: the connection's display name, e.g. "9Router" */
+    label: text('label'),
+    /** custom: whether the chosen model can read screenshots */
+    vision: boolean('vision').notNull().default(false),
+    /** custom: per-account output budget, 1024–16000 */
+    maxOutputTokens: integer('max_output_tokens').notNull().default(8192),
     connectedAt: bigint('connected_at', { mode: 'number' }).notNull(),
     updatedAt: bigint('updated_at', { mode: 'number' }).notNull(),
   },

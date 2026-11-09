@@ -12,6 +12,7 @@ import { readConnections } from './agentDefaults.ts'
 import {
   accountModelFor,
   chatgptConnectEnabled,
+  getAccounts,
   statusOf,
   takesReasoningEffort,
   type AccountKind,
@@ -21,6 +22,7 @@ import { CLAUDE_EFFORT_OPTIONS, CLAUDE_MODELS } from '../shared/localAgent.ts'
 import { ANTHROPIC_MODELS, GEMINI_MODELS, OPENROUTER_MODELS, reasoningEffortOptions } from '../shared/modelMenu.ts'
 import type { ModelOption } from '../shared/modelMenu.ts'
 import { RUNNER_NAMES, type AgentRunner, type AgentRunners, type RunnerProvider } from '../shared/agentRunner.ts'
+import { customEndpointPolicy, customEndpointsEnabled, type CustomEndpointPolicy } from './customEndpoint.ts'
 
 /** the curated menu each account kind's picker opens with */
 export const MODEL_MENUS: Record<AccountKind, ModelOption[]> = {
@@ -29,6 +31,9 @@ export const MODEL_MENUS: Record<AccountKind, ModelOption[]> = {
   'anthropic-key': ANTHROPIC_MODELS,
   'openrouter-key': OPENROUTER_MODELS,
   'gemini-key': GEMINI_MODELS,
+  /* the custom provider has no curated roster: its list is live or the one
+     stored model */
+  custom: [],
 }
 
 export async function listRunners(userId: string): Promise<AgentRunners> {
@@ -48,6 +53,17 @@ export async function listRunners(userId: string): Promise<AgentRunners> {
   }
   for (const account of connections.accounts) {
     if (!account.enabled) continue
+    if (account.kind === 'custom') {
+      const model = accountModelFor(account)
+      runners.push({
+        provider: 'custom',
+        name: account.label || RUNNER_NAMES.custom,
+        model,
+        vision: account.vision === true,
+        models: [{ id: model, name: model, blurb: '' }],
+      })
+      continue
+    }
     const effort = takesReasoningEffort(account.kind) ? effortFor(account) : undefined
     runners.push({
       provider: account.kind,
@@ -70,15 +86,25 @@ export interface AccountsView {
   accounts: AccountStatus[]
   default?: RunnerProvider
   chatgptEnabled: boolean
+  /** whether the custom-provider feature is on at all */
+  customEnabled: boolean
+  /** the server-level endpoint policy, so the form can explain allowed URLs */
+  policy: CustomEndpointPolicy
   menus: Record<AccountKind, ModelOption[]>
 }
 
 export async function accountsView(userId: string): Promise<AccountsView> {
-  const connections = await readConnections(userId)
+  /* the view is informational, so it lists every stored row even when the
+     policy is `off` — that is how the owner can still see and delete a custom
+     key. Routing (`readConnections`) keeps hiding it, so an off policy never
+     runs or bills it. */
+  const [connections, accounts] = await Promise.all([readConnections(userId), getAccounts(userId)])
   return {
-    accounts: connections.accounts.map(statusOf),
+    accounts: accounts.map(statusOf),
     ...(connections.default ? { default: connections.default } : {}),
     chatgptEnabled: chatgptConnectEnabled(),
+    customEnabled: customEndpointsEnabled(),
+    policy: customEndpointPolicy(),
     menus: MODEL_MENUS,
   }
 }

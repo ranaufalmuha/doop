@@ -14,6 +14,7 @@ import {
 } from '../shared/modelMenu.ts'
 import { CLAUDE_API_MODEL, GEMINI_API_MODEL, OPENAI_API_MODEL } from './modelCatalog.ts'
 import { effortFor, modelFor } from './openaiAgent.ts'
+import { DEFAULT_OUTPUT_TOKENS, isValidCustomModelId } from './customEndpoint.ts'
 
 /**
  * "Bring your own model": a user connects their ChatGPT subscription (or an
@@ -57,7 +58,7 @@ const REDIRECT_URI = env.CHATGPT_OAUTH_REDIRECT_URI
    fetch — an ordinary product User-Agent passes where no header at all does */
 const AUTH_USER_AGENT = env.CHATGPT_AUTH_USER_AGENT
 
-export type AccountKind = 'chatgpt' | 'openai-key' | 'anthropic-key' | 'openrouter-key' | 'gemini-key'
+export type AccountKind = 'chatgpt' | 'openai-key' | 'anthropic-key' | 'openrouter-key' | 'gemini-key' | 'custom'
 
 const ACCOUNT_KINDS: readonly string[] = [
   'chatgpt',
@@ -65,6 +66,7 @@ const ACCOUNT_KINDS: readonly string[] = [
   'anthropic-key',
   'openrouter-key',
   'gemini-key',
+  'custom',
 ] satisfies AccountKind[]
 
 export interface ModelAccount {
@@ -81,6 +83,14 @@ export interface ModelAccount {
   model?: string
   /** OpenAI reasoning effort the user picked; unset = the server default */
   effort?: ReasoningEffort
+  /** custom: the stored origin (`scheme://host[:port]`) */
+  baseUrl?: string
+  /** custom: the connection's display name */
+  label?: string
+  /** custom: whether the chosen model can read screenshots */
+  vision?: boolean
+  /** custom: per-account output budget */
+  maxOutputTokens?: number
   /** off keeps the credential but takes the account out of use */
   enabled: boolean
   connectedAt: number
@@ -96,6 +106,11 @@ export interface AccountStatus {
   model?: string
   /** the reasoning effort in effect, resolved; only the OpenAI kinds have one */
   effort?: string
+  /** custom: display name, stored origin, vision flag and output budget */
+  label?: string
+  baseUrl?: string
+  vision?: boolean
+  maxOutputTokens?: number
   connectedAt: number
 }
 
@@ -136,6 +151,9 @@ function toAccount(row: typeof modelAccounts.$inferSelect): ModelAccount | null 
     ...(row.apiKey ? { apiKey: row.apiKey } : {}),
     ...(row.model ? { model: row.model } : {}),
     ...(isReasoningEffort(row.reasoningEffort) ? { effort: row.reasoningEffort } : {}),
+    ...(row.baseUrl ? { baseUrl: row.baseUrl } : {}),
+    ...(row.label ? { label: row.label } : {}),
+    ...(row.kind === 'custom' ? { vision: row.vision, maxOutputTokens: row.maxOutputTokens } : {}),
     enabled: row.enabled,
     connectedAt: row.connectedAt,
   }
@@ -169,6 +187,14 @@ export function statusOf(account: ModelAccount): AccountStatus {
     /* resolved, so the UI shows what will actually run rather than "default" */
     model: accountModelFor(account),
     ...(takesReasoningEffort(account.kind) ? { effort: effortFor(account) } : {}),
+    ...(account.kind === 'custom'
+      ? {
+          ...(account.label ? { label: account.label } : {}),
+          ...(account.baseUrl ? { baseUrl: account.baseUrl } : {}),
+          vision: account.vision === true,
+          maxOutputTokens: account.maxOutputTokens ?? DEFAULT_OUTPUT_TOKENS,
+        }
+      : {}),
     connectedAt: account.connectedAt,
   }
 }
@@ -201,6 +227,13 @@ const MODEL_POLICY: Record<AccountKind, { resolve(model?: string): string; isKno
     resolve: (model) => model || DEFAULT_GEMINI,
     isKnown: (model) => GEMINI_API_MODEL.test(model),
   },
+  /* the custom provider stores any opaque id the user typed or the catalog
+     offered; the probe proved the id on connect, the first turn is the check
+     after a manual PATCH */
+  custom: {
+    resolve: (model) => model || '',
+    isKnown: (model) => isValidCustomModelId(model),
+  },
 }
 
 export function accountModelFor(account: Pick<ModelAccount, 'kind' | 'model'>): string {
@@ -228,7 +261,10 @@ export function accountWithPick(account: ModelAccount, pick: RunnerPick | undefi
  *  curated menu (a server env override) is trusted to have vision except on
  *  OpenRouter, whose roster mixes text-only models — there the conservative
  *  answer is a degraded run rather than a 400 on the first screenshot. */
-export function accountVisionFor(account: Pick<ModelAccount, 'kind' | 'model'>): boolean {
+export function accountVisionFor(account: Pick<ModelAccount, 'kind' | 'model' | 'vision'>): boolean {
+  /* the custom provider's flag is the user's deliberate choice, proved by the
+     connect probe when on */
+  if (account.kind === 'custom') return account.vision === true
   const model = accountModelFor(account)
   const menu =
     account.kind === 'openrouter-key' ? OPENROUTER_MODELS : account.kind === 'gemini-key' ? GEMINI_MODELS : null
